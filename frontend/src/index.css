@@ -1,0 +1,186 @@
+@import "tailwindcss";
+
+:root, :root[data-theme="sumi"] {
+  --bg-color: #12151d;
+  --surface-color: #1a1e29;
+  --surface-hover: #222836;
+  --text-color: #ede8dc;
+  --text-muted: #949086;
+  --accent-vermillion: #c33d2e;
+  --accent-indigo: #5a71a0;
+  --border-color: rgba(90, 113, 160, 0.18);
+  --hanko-border: #c33d2e;
+  --hanko-bg: rgba(195, 61, 46, 0.15);
+  --font-heading: 'Shippori Mincho', 'Noto Serif JP', serif;
+  --font-body: 'Zen Kaku Gothic New', 'Inter', sans-serif;
+}
+
+:root[data-theme="washi"] {
+  --bg-color: #f6f3eb;
+  --surface-color: #eae4d6;
+  --surface-hover: #dfd8c7;
+  --text-color: #1a1a1a;
+  --text-muted: #666258;
+  --accent-vermillion: #c33d2e;
+  --accent-indigo: #2a3a5c;
+  --border-color: rgba(42, 58, 92, 0.15);
+  --hanko-border: #f59e0b;
+  --hanko-bg: rgba(234, 228, 214, 0.95);
+  --font-heading: 'Shippori Mincho', 'Noto Serif JP', serif;
+  --font-body: 'Zen Kaku Gothic New', 'Inter', sans-serif;
+}
+
+:root[data-theme="amoled"], :root[data-theme="classic"] {
+  --bg-color: #000000;
+  --surface-color: #0d0d0d;
+  --surface-hover: #171717;
+  --text-color: #f5f5f7;
+  --text-muted: #8e8e93;
+  --accent-vermillion: #ff3b30;
+  --accent-indigo: #0a84ff;
+  --border-color: rgba(255, 255, 255, 0.14);
+  --hanko-border: #fbbf24;
+  --hanko-bg: rgba(13, 13, 13, 0.95);
+  --font-heading: 'Shippori Mincho', 'Noto Serif JP', serif;
+  --font-body: 'Zen Kaku Gothic New', 'Inter', sans-serif;
+}
+
+body {
+  background-color: var(--bg-color);
+  color: var(--text-color);
+  margin: 0;
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+h1, h2, h3, .font-serif-jp {
+  font-family: var(--font-heading);
+}
+
+.font-sans-jp {
+  font-family: var(--font-body);
+}
+
+/* Custom Lightweight Dynamic Scrollbars (Overriding Browser Defaults Everywhere) */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-color);
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(148, 144, 134, 0.25);
+  border-radius: 9999px;
+  border: 2px solid var(--bg-color);
+  transition: background 0.2s ease;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-vermillion);
+}
+
+/* Firefox Scrollbar Support */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(148, 144, 134, 0.3) var(--bg-color);
+}
+
+
+/* Fast, Lightweight Subtle Backdrop Gradient (No Laggy SVG Filters) */
+.washi-paper-overlay {
+  background-image: radial-gradient(circle at 50% 0%, var(--surface-color) 0%, var(--bg-color) 80%);
+}
+
+/* Utility to hide scrollbar for horizontal carousels */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Dynamic Title Font Option Overrides */
+:root[data-title-font="serif"] {
+  --font-heading: 'Shippori Mincho', 'Noto Serif JP', Georgia, serif;
+}
+:root[data-title-font="sans"] {
+  --font-heading: 'Zen Kaku Gothic New', 'Inter', system-ui, sans-serif;
+}
+:root[data-title-font="mono"] {
+  --font-heading: 'JetBrains Mono', 'Space Mono', monospace;
+}
+:root[data-title-font="display"] {
+  --font-heading: 'Cinzel', 'Playfair Display', Georgia, serif;
+}
+
+/* Finalized Ink Crest Circular Seal (Symmetrical 28px x 28px matching bookmark button) */
+.stamp-crest {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 1.5px solid var(--accent-vermillion);
+  color: #ffffff;
+  background-color: rgba(12, 12, 16, 0.94);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: monospace;
+  font-weight: 800;
+  font-size: 10px;
+  letter-spacing: -0.5px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.85);
+  pointer-events: none;
+  line-height: 1;
+}
+
+/* Hardware-Accelerated Fast Scrolling Optimization for 100+ Grid Results */
+.manga-card-item {
+  content-visibility: auto;
+  contain-intrinsic-size: 1px 340px;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+}
+
+
+.stamp-num {
+  line-height: 1;
+}
+
+.stamp-pct {
+  font-size: 9px;
+  opacity: 0.85;
+  line-height: 1;
+}
+
+
+/* Vertical Text Sidebar Utility */
+.vertical-text {
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  letter-spacing: 0.15em;
+}
+
+/* Custom Scrollbars */
+.custom-scrollbar::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 9999px;
+}
+
+.custom-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-indigo);
+}
