@@ -59,6 +59,51 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
     await set_cached(cache_key, [r.model_dump() for r in response], ttl=86400)
     return response
 
+@router.get("/manga/trending", response_model=List[RecommendationResult])
+async def get_trending_manga(limit: int = 12, db: AsyncSession = Depends(get_db)):
+    cache_key = f"manga:trending:{limit}"
+    cached_data = await get_cached(cache_key)
+    if cached_data:
+        return cached_data
+
+    # Trending formula: recent start_year (>= 2020) or currently RELEASING,
+    # ordered by popularity * average_score
+    stmt = (
+        select(Manga)
+        .where(
+            Manga.cover_image_url.isnot(None),
+            (Manga.start_year >= 2020) | (Manga.status == "RELEASING")
+        )
+        .order_by((Manga.popularity * Manga.average_score).desc().nullslast())
+        .limit(limit)
+    )
+    result = await db.execute(stmt)
+    mangas = result.scalars().all()
+    
+    response = [
+        RecommendationResult(
+            id=m.id,
+            anilist_id=m.anilist_id,
+            mal_id=m.mal_id,
+            title=m.title_english or m.title_romaji or m.title_native or "Unknown Title",
+            cover_image_url=m.cover_image_url,
+            banner_image=m.banner_image,
+            synopsis=m.synopsis,
+            genres=m.genres,
+            tags=m.tags,
+            status=m.status,
+            start_year=m.start_year,
+            chapters=m.chapters,
+            volumes=m.volumes,
+            average_score=m.average_score,
+            similarity_score=0.98,
+            llm_reasoning=None
+        ) for m in mangas
+    ]
+    
+    await set_cached(cache_key, [r.model_dump() for r in response], ttl=14400)
+    return response
+
 @router.get("/manga/{manga_id}", response_model=MangaDetail)
 async def get_manga(manga_id: int, db: AsyncSession = Depends(get_db)):
     cache_key = f"manga:detail:{manga_id}"

@@ -220,6 +220,34 @@ export default function App() {
         )}
 
 
+        {/* TRENDING TAB VIEW */}
+        {activeTab === 'trending' && (
+          <div className="pt-4 pb-20 space-y-6">
+            <div className="flex flex-col gap-1 border-b border-[var(--border-color)] pb-4">
+              <div className="flex items-center gap-2">
+                <span className="text-xl">🔥</span>
+                <h2 className="font-serif-jp text-xl md:text-2xl font-bold text-[var(--text-color)]">
+                  Trending Titles
+                </h2>
+              </div>
+              <p className="text-xs text-[var(--text-muted)]">
+                Most popular active releases and highly rated series in the Mitsu collection.
+              </p>
+            </div>
+
+            <MangaGrid
+              mangas={mangas.filter(m => (m.start_year && m.start_year >= 2020) || m.status === 'RELEASING')}
+              loading={loading}
+              hasSearched={true}
+              onCardClick={setSelectedManga}
+              bookmarks={bookmarks}
+              onToggleBookmark={handleToggleBookmark}
+              cardDensity={settings.cardDensity || 'standard'}
+              hoverAccent={settings.hoverAccent || 'vermillion'}
+            />
+          </div>
+        )}
+
         {/* BOOKMARKS TAB VIEW */}
         {activeTab === 'bookmarks' && (
           <div className="pt-4 pb-20">

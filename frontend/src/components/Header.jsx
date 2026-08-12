@@ -44,6 +44,18 @@ export default function Header({
           </button>
 
           <button
+            onClick={() => setActiveTab('trending')}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
+              activeTab === 'trending'
+                ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-color)]'
+            }`}
+          >
+            <span className="text-xs">🔥</span>
+            Trending
+          </button>
+
+          <button
             onClick={() => setActiveTab('bookmarks')}
             className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer relative ${
               activeTab === 'bookmarks'
