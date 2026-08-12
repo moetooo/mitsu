@@ -6,6 +6,7 @@ from ..db import get_db
 from ..db_models import Manga
 from ..models import MangaDetail, RecommendationResult
 from ..services.retrieval import retrieve_similar_manga
+from ..services.cache import get_cached, set_cached
 
 import random
 from datetime import datetime
@@ -14,6 +15,13 @@ router = APIRouter()
 
 @router.get("/manga/featured", response_model=List[RecommendationResult])
 async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db)):
+    date_str = datetime.utcnow().strftime("%Y-%m-%d")
+    cache_key = f"manga:featured:{date_str}:{limit}"
+    
+    cached_data = await get_cached(cache_key)
+    if cached_data:
+        return cached_data
+
     # Retrieve top 60 popular candidates with valid covers from DB
     stmt = select(Manga).where(Manga.cover_image_url.isnot(None)).order_by(Manga.popularity.desc().nullslast()).limit(60)
     result = await db.execute(stmt)
@@ -24,11 +32,10 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
         
     # Seed by current UTC date so featured titles are random from DB,
     # but remain stable across page refreshes throughout the day!
-    seed_str = datetime.utcnow().strftime("%Y-%m-%d")
-    rng = random.Random(seed_str)
+    rng = random.Random(date_str)
     selected_mangas = rng.sample(mangas_pool, min(len(mangas_pool), limit))
     
-    return [
+    response = [
         RecommendationResult(
             id=m.id,
             anilist_id=m.anilist_id,
@@ -48,9 +55,17 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
             llm_reasoning=None
         ) for m in selected_mangas
     ]
+    
+    await set_cached(cache_key, [r.model_dump() for r in response], ttl=86400)
+    return response
 
 @router.get("/manga/{manga_id}", response_model=MangaDetail)
 async def get_manga(manga_id: int, db: AsyncSession = Depends(get_db)):
+    cache_key = f"manga:detail:{manga_id}"
+    cached_data = await get_cached(cache_key)
+    if cached_data:
+        return cached_data
+
     stmt = select(Manga).where(Manga.id == manga_id)
     result = await db.execute(stmt)
     manga = result.scalar_one_or_none()
@@ -58,10 +73,17 @@ async def get_manga(manga_id: int, db: AsyncSession = Depends(get_db)):
     if not manga:
         raise HTTPException(status_code=404, detail="Manga not found")
         
-    return manga
+    detail = MangaDetail.model_validate(manga)
+    await set_cached(cache_key, detail.model_dump(), ttl=3600)
+    return detail
 
 @router.get("/manga/{manga_id}/similar", response_model=List[RecommendationResult])
 async def get_similar_manga(manga_id: int, limit: int = 6, db: AsyncSession = Depends(get_db)):
+    cache_key = f"manga:similar:{manga_id}:{limit}"
+    cached_data = await get_cached(cache_key)
+    if cached_data:
+        return cached_data
+
     stmt = select(Manga).where(Manga.id == manga_id)
     result = await db.execute(stmt)
     manga = result.scalar_one_or_none()
@@ -97,4 +119,5 @@ async def get_similar_manga(manga_id: int, limit: int = 6, db: AsyncSession = De
         if len(results) >= limit:
             break
             
+    await set_cached(cache_key, [r.model_dump() for r in results], ttl=3600)
     return results
