@@ -60,6 +60,57 @@ export default function App() {
     return saved ? JSON.parse(saved) : [];
   });
 
+  // Trending Section Divided State & Filters
+  const [trendingFormat, setTrendingFormat] = useState('all'); // 'all' | 'manga' | 'manhwa' | 'manhua'
+  const [trendingGenre, setTrendingGenre] = useState('all'); // 'all' | 'Action' | 'Fantasy' | ...
+  const [isTop10, setIsTop10] = useState(false);
+  const [trendingPage, setTrendingPage] = useState(1);
+  const [trendingMangas, setTrendingMangas] = useState([]);
+  const [loadingTrending, setLoadingTrending] = useState(false);
+  const [hasMoreTrending, setHasMoreTrending] = useState(true);
+
+  const fetchTrendingData = (pageNum = 1, append = false) => {
+    if (activeTab !== 'trending') return;
+    setLoadingTrending(true);
+
+    const limit = 12;
+    const formatParam = trendingFormat !== 'all' ? `&format_type=${trendingFormat}` : '';
+    const genreParam = trendingGenre !== 'all' ? `&genre=${encodeURIComponent(trendingGenre)}` : '';
+
+    const url = `http://localhost:8000/manga/trending?page=${pageNum}&limit=${limit}${formatParam}${genreParam}`;
+
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
+        const results = Array.isArray(data) ? data : [];
+        if (pageNum === 1 && !append) {
+          setTrendingMangas(results);
+        } else {
+          setTrendingMangas(prev => {
+            const existingIds = new Set(prev.map(m => m.id));
+            const uniqueNew = results.filter(m => !existingIds.has(m.id));
+            return [...prev, ...uniqueNew];
+          });
+        }
+        setHasMoreTrending(results.length >= limit);
+      })
+      .catch(err => console.error("Trending fetch error:", err))
+      .finally(() => setLoadingTrending(false));
+  };
+
+  useEffect(() => {
+    if (activeTab === 'trending') {
+      setTrendingPage(1);
+      fetchTrendingData(1, false);
+    }
+  }, [activeTab, trendingFormat, trendingGenre]);
+
+  const handleLoadMoreTrending = () => {
+    const nextPage = trendingPage + 1;
+    setTrendingPage(nextPage);
+    fetchTrendingData(nextPage, true);
+  };
+
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', settings.theme || 'sumi');
     document.documentElement.setAttribute('data-title-font', settings.fontStyle || 'serif');
@@ -223,28 +274,98 @@ export default function App() {
         {/* TRENDING TAB VIEW */}
         {activeTab === 'trending' && (
           <div className="pt-4 pb-20 space-y-6">
-            <div className="flex flex-col gap-1 border-b border-[var(--border-color)] pb-4">
-              <div className="flex items-center gap-2">
-                <span className="text-xl">🔥</span>
-                <h2 className="font-serif-jp text-xl md:text-2xl font-bold text-[var(--text-color)]">
-                  Trending Titles
-                </h2>
+            
+            {/* Header & Sub-Tabs Navigation */}
+            <div className="flex flex-col gap-4 border-b border-[var(--border-color)] pb-5">
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-2">
+                  <svg className="w-5 h-5 text-[var(--accent-vermillion)]" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 18.657A8 8 0 016.343 7.343S7 9 9 10c0-2 .5-5 2.986-7C14 5 16.09 5.777 17.656 7.343A7.975 7.975 0 0120 13a7.975 7.975 0 01-2.343 5.657z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.879 16.121A3 3 0 1012.015 11L11 14H9c0 .768.293 1.536.879 2.121z" />
+                  </svg>
+                  <h2 className="font-serif-jp text-xl md:text-2xl font-bold text-[var(--text-color)]">
+                    Trending Collections
+                  </h2>
+                </div>
+                <p className="text-xs text-[var(--text-muted)] font-mono">
+                  Live trending releases directly from AniList divided by origin format & genre.
+                </p>
               </div>
-              <p className="text-xs text-[var(--text-muted)]">
-                Most popular active releases and highly rated series in the Mitsu collection.
-              </p>
+
+              {/* Format Origin Sub-Tabs (Aesthetic Floating Capsule) */}
+              <div className="inline-flex max-w-full items-center gap-1 bg-[var(--surface-color)]/80 backdrop-blur-md border border-[var(--border-color)] p-1 rounded-full overflow-x-auto no-scrollbar shadow-xs self-start">
+                {[
+                  { id: 'all', label: 'All Formats' },
+                  { id: 'manga', label: 'Manga', tag: 'JP' },
+                  { id: 'manhwa', label: 'Manhwa', tag: 'KR' },
+                  { id: 'manhua', label: 'Manhua', tag: 'CN' }
+                ].map(sub => (
+                  <button
+                    key={sub.id}
+                    onClick={() => setTrendingFormat(sub.id)}
+                    className={`px-3.5 py-1.5 rounded-full text-xs font-mono transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                      trendingFormat === sub.id
+                        ? 'bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
+                        : 'text-[var(--text-muted)] hover:text-[var(--text-color)] hover:bg-[var(--bg-color)]/60'
+                    }`}
+                  >
+                    <span>{sub.label}</span>
+                    {sub.tag && (
+                      <span className={`text-[9px] px-1.5 py-0.5 rounded-md font-bold font-mono tracking-wider ${
+                        trendingFormat === sub.id 
+                          ? 'bg-white/20 text-white' 
+                          : 'bg-[var(--bg-color)] text-[var(--text-muted)] border border-[var(--border-color)]'
+                      }`}>
+                        {sub.tag}
+                      </span>
+                    )}
+                  </button>
+                ))}
+              </div>
+
+              {/* Genre Pills Filter Row */}
+              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1">
+                <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1">
+                  Genre:
+                </span>
+                {[
+                  "all", "Action", "Adventure", "Comedy", "Drama", "Fantasy", 
+                  "Horror", "Romance", "Sci-Fi", "Slice of Life", "Supernatural", "Isekai"
+                ].map(g => (
+                  <button
+                    key={g}
+                    type="button"
+                    onClick={() => setTrendingGenre(g)}
+                    className={`px-3 py-1 rounded-full text-xs font-mono border transition-all cursor-pointer whitespace-nowrap ${
+                      trendingGenre === g
+                        ? 'bg-[var(--accent-indigo)] border-[var(--accent-indigo)] text-white font-bold shadow-xs'
+                        : 'bg-[var(--surface-color)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-color)]'
+                    }`}
+                  >
+                    {g === 'all' ? 'All Genres' : `#${g}`}
+                  </button>
+                ))}
+              </div>
             </div>
 
+            {/* FORMAT CATALOG GRID VIEW */}
             <MangaGrid
-              mangas={mangas.filter(m => (m.start_year && m.start_year >= 2020) || m.status === 'RELEASING')}
-              loading={loading}
+              mangas={trendingMangas}
+              loading={loadingTrending}
               hasSearched={true}
               onCardClick={setSelectedManga}
               bookmarks={bookmarks}
               onToggleBookmark={handleToggleBookmark}
-              cardDensity={settings.cardDensity || 'standard'}
+              gridSize={settings.gridSize || 'standard'}
+              stampStyle={settings.stampStyle || 'crest'}
               hoverAccent={settings.hoverAccent || 'vermillion'}
+              hideDivider={true}
+              showRank={true}
+              showMatchPct={false}
+              hasMore={hasMoreTrending}
+              onLoadMore={handleLoadMoreTrending}
             />
+
           </div>
         )}
 
@@ -256,6 +377,8 @@ export default function App() {
               onSelectManga={setSelectedManga}
               onToggleBookmark={handleToggleBookmark}
               onClearAll={() => setBookmarks([])}
+              gridSize={settings.gridSize || 'standard'}
+              hoverAccent={settings.hoverAccent || 'vermillion'}
             />
           </div>
         )}

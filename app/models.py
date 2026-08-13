@@ -35,7 +35,7 @@ class RecommendationResult(BaseModel):
     chapters: Optional[int] = None
     volumes: Optional[int] = None
     average_score: Optional[int] = None
-    similarity_score: float
+    similarity_score: Optional[float] = None
     llm_reasoning: Optional[str] = None
 
 class RecommendResponse(BaseModel):

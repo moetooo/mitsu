@@ -4,9 +4,13 @@ export default function MangaCard({
   isBookmarked, 
   onToggleBookmark,
   gridSize = 'standard',
-  hoverAccent = 'vermillion'
+  hoverAccent = 'vermillion',
+  showMatchPct = true,
+  rank = null
 }) {
-  const matchPct = manga.similarity_score !== undefined ? Math.round(manga.similarity_score * 100) : null;
+  const matchPct = (showMatchPct && manga.similarity_score !== undefined && manga.similarity_score !== null) 
+    ? Math.round(manga.similarity_score * 100) 
+    : null;
 
   const hoverBorderMap = {
     vermillion: 'hover:border-[var(--accent-vermillion)]',
@@ -42,8 +46,15 @@ export default function MangaCard({
         {/* Subtle Dark Bottom Gradient */}
         <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-80 group-hover:opacity-90 transition-opacity" />
 
+        {/* Top-Right Corner Rank Badge */}
+        {rank !== null && (
+          <div className="absolute top-2.5 right-2.5 z-20 w-7 h-7 rounded-full bg-[var(--accent-vermillion)] text-white font-mono text-xs font-bold flex items-center justify-center border-2 border-[var(--bg-color)] shadow-md">
+            #{rank}
+          </div>
+        )}
+
         {/* Finalized Circular Ink Crest (Symmetrical 28px x 28px Circle) */}
-        {matchPct !== null && (
+        {matchPct !== null && rank === null && (
           <div className="absolute top-2.5 right-2.5 stamp-crest z-10">
             <span>{matchPct}%</span>
           </div>

@@ -12,19 +12,23 @@ export default function MangaGrid({
   hoverAccent = 'vermillion',
   hasMore = false,
   onLoadMore = null,
-  hasSearched = false
+  hasSearched = false,
+  hideDivider = false,
+  showRank = false,
+  showMatchPct = true
 }) {
   const isBookmarked = (id) => bookmarks.some(b => b.id === id);
 
+  const activeGridSize = gridSize || 'standard';
   const gridColsMap = {
-    compact: 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-4',
+    compact: 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5',
     standard: 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6',
     large: 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-8'
   };
 
   if (loading && mangas.length === 0) {
     return (
-      <div className={`grid ${gridColsMap[gridSize]}`}>
+      <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
         {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
           <div key={i} className="aspect-[2/3] bg-[var(--surface-color)] rounded-2xl animate-pulse border border-[var(--border-color)]" />
         ))}
@@ -44,20 +48,23 @@ export default function MangaGrid({
 
   return (
     <div className="space-y-8">
-      <SectionDivider label={`Results (${mangas.length})`} />
+      {!hideDivider && <SectionDivider label={`Results (${mangas.length})`} />}
 
-      <div className={`grid ${gridColsMap[gridSize]}`}>
-        {mangas.map(m => (
-          <MangaCard 
-            key={m.id}
-            manga={m}
-            onClick={onCardClick}
-            isBookmarked={isBookmarked(m.id)}
-            onToggleBookmark={onToggleBookmark}
-            gridSize={gridSize}
-            stampStyle={stampStyle}
-            hoverAccent={hoverAccent}
-          />
+      <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
+        {mangas.map((m, idx) => (
+          <div key={m.id || idx} className="relative">
+            <MangaCard 
+              manga={m}
+              onClick={onCardClick}
+              isBookmarked={isBookmarked(m.id)}
+              onToggleBookmark={onToggleBookmark}
+              gridSize={activeGridSize}
+              stampStyle={stampStyle}
+              hoverAccent={hoverAccent}
+              showMatchPct={showMatchPct}
+              rank={showRank ? (idx + 1) : null}
+            />
+          </div>
         ))}
       </div>
 

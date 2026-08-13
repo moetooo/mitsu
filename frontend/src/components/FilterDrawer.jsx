@@ -92,9 +92,9 @@ export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onR
             <div className="flex flex-wrap gap-2">
               {[
                 { id: null, label: 'All Formats' },
-                { id: 'Manga', label: '🇯🇵 Manga' },
-                { id: 'Manhwa', label: '🇰🇷 Manhwa' },
-                { id: 'Manhua', label: '🇨🇳 Manhua' }
+                { id: 'Manga', label: 'Manga (JP)' },
+                { id: 'Manhwa', label: 'Manhwa (KR)' },
+                { id: 'Manhua', label: 'Manhua (CN)' }
               ].map(fmt => {
                 const currentFmts = Array.isArray(filters.format_type) 
                   ? filters.format_type 
