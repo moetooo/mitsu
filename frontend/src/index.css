@@ -119,6 +119,28 @@ h1, h2, h3, .font-serif-jp {
   --font-heading: 'Cinzel', 'Playfair Display', Georgia, serif;
 }
 
+/* Dynamic Accent Color Palette Overrides */
+:root[data-accent="vermillion"] {
+  --accent-vermillion: #c33d2e;
+  --hanko-border: #c33d2e;
+}
+:root[data-accent="gold"] {
+  --accent-vermillion: #d97706;
+  --hanko-border: #d97706;
+}
+:root[data-accent="emerald"] {
+  --accent-vermillion: #2e7d32;
+  --hanko-border: #2e7d32;
+}
+:root[data-accent="indigo"] {
+  --accent-vermillion: #4a69bd;
+  --hanko-border: #4a69bd;
+}
+:root[data-accent="rose"] {
+  --accent-vermillion: #e11d48;
+  --hanko-border: #e11d48;
+}
+
 /* Finalized Ink Crest Circular Seal (Symmetrical 28px x 28px matching bookmark button) */
 .stamp-crest {
   width: 28px;

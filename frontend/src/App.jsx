@@ -114,6 +114,7 @@ export default function App() {
   useEffect(() => {
     document.documentElement.setAttribute('data-theme', settings.theme || 'sumi');
     document.documentElement.setAttribute('data-title-font', settings.fontStyle || 'serif');
+    document.documentElement.setAttribute('data-accent', settings.accent || settings.hoverAccent || 'vermillion');
     localStorage.setItem('mitsu_settings', JSON.stringify(settings));
   }, [settings]);
 

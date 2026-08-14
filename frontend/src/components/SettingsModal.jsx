@@ -61,6 +61,36 @@ export default function SettingsModal({ settings, setSettings, isOpen, onClose }
             </div>
           </div>
 
+          {/* Shibui Accent Color Palette Selector */}
+          <div>
+            <label className="text-xs font-mono font-bold text-[var(--text-muted)] uppercase tracking-wider block mb-2">
+              Accent Color Palette (Shibui Styling)
+            </label>
+            <div className="grid grid-cols-5 gap-2">
+              {[
+                { id: 'vermillion', kanji: '朱', name: 'Vermillion', color: 'bg-[#c33d2e]' },
+                { id: 'gold', kanji: '琥珀', name: 'Kintsugi', color: 'bg-[#d97706]' },
+                { id: 'emerald', kanji: '竹', name: 'Emerald', color: 'bg-[#2e7d32]' },
+                { id: 'indigo', kanji: '藍', name: 'Indigo', color: 'bg-[#4a69bd]' },
+                { id: 'rose', kanji: '桜', name: 'Rose', color: 'bg-[#e11d48]' }
+              ].map(a => (
+                <button
+                  key={a.id}
+                  onClick={() => setSettings(prev => ({ ...prev, accent: a.id, hoverAccent: a.id }))}
+                  className={`p-2.5 rounded-2xl border flex flex-col items-center gap-1 transition-all cursor-pointer text-center ${
+                    (settings.accent || settings.hoverAccent || 'vermillion') === a.id
+                      ? 'border-[var(--accent-vermillion)] bg-[var(--bg-color)] shadow-md ring-2 ring-[var(--accent-vermillion)]/30 text-[var(--text-color)] font-bold'
+                      : 'border-[var(--border-color)] bg-[var(--bg-color)]/50 text-[var(--text-muted)] hover:border-[var(--accent-indigo)]'
+                  }`}
+                >
+                  <div className={`w-4 h-4 rounded-full ${a.color} border border-white/20 shadow-xs mb-0.5`} />
+                  <span className="text-[11px] font-serif-jp leading-none">{a.kanji}</span>
+                  <span className="text-[9px] font-mono leading-none opacity-80">{a.name}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
 
           {/* Title Font Selector */}
           <div>
