@@ -1,7 +1,7 @@
 import MangaGrid from './MangaGrid';
 import SectionDivider from './SectionDivider';
 
-export default function BookmarksView({ bookmarks, onSelectManga, onToggleBookmark, onClearAll }) {
+export default function BookmarksView({ bookmarks, onSelectManga, onToggleBookmark, onClearAll, gridSize = 'standard', hoverAccent = 'vermillion' }) {
   if (bookmarks.length === 0) {
     return (
       <div className="text-center py-20 space-y-4 max-w-md mx-auto">
@@ -31,14 +31,15 @@ export default function BookmarksView({ bookmarks, onSelectManga, onToggleBookma
         </button>
       </div>
 
-      <SectionDivider label="Saved Collection" />
-
       <MangaGrid 
         mangas={bookmarks}
         loading={false}
         onCardClick={onSelectManga}
         bookmarks={bookmarks}
         onToggleBookmark={onToggleBookmark}
+        gridSize={gridSize}
+        hoverAccent={hoverAccent}
+        hideDivider={true}
       />
     </div>
   );
