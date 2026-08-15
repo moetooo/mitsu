@@ -34,6 +34,8 @@ async def retrieve_similar_manga(
             where_clauses.append(f"average_score >= {int(filters.min_score)}")
         if filters.min_chapters:
             where_clauses.append(f"chapters >= {int(filters.min_chapters)}")
+        if filters.max_chapters:
+            where_clauses.append(f"chapters <= {int(filters.max_chapters)}")
         if filters.genres:
             genres_arr = "ARRAY[" + ",".join(f"'{g}'" for g in filters.genres) + "]"
             where_clauses.append(f"genres && {genres_arr}")

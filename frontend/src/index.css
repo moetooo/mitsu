@@ -45,6 +45,11 @@
   --font-body: 'Zen Kaku Gothic New', 'Inter', sans-serif;
 }
 
+html {
+  overflow-y: scroll;
+  scrollbar-gutter: stable;
+}
+
 body {
   background-color: var(--bg-color);
   color: var(--text-color);

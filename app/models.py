@@ -7,6 +7,7 @@ class RecommendFilters(BaseModel):
     max_year: Optional[int] = None
     min_score: Optional[int] = None
     min_chapters: Optional[int] = None
+    max_chapters: Optional[int] = None
     min_match_pct: Optional[float] = None
     genres: Optional[List[str]] = None
     exclude_genres: Optional[List[str]] = None

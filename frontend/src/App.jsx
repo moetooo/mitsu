@@ -15,6 +15,7 @@ const INITIAL_FILTERS = {
   max_year: null,
   min_score: 0,
   min_chapters: null,
+  max_chapters: null,
   min_match_pct: 0,
   genres: [],
   exclude_genres: [],
