@@ -144,3 +144,105 @@ async def retrieve_similar_manga(
 
     return candidates
 
+
+async def retrieve_roulette_manga(
+    session: AsyncSession,
+    filters: Optional[RecommendFilters] = None,
+    seen_ids: Optional[List[int]] = None,
+    pool_limit: int = 40
+):
+    import random
+
+    where_clauses = ["cover_image_url IS NOT NULL"]
+    
+    # NSFW Filtering
+    allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
+    if not allow_nsfw:
+        where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")
+    
+    if filters:
+        if filters.status:
+            st_list = ", ".join(f"'{s}'" for s in filters.status)
+            where_clauses.append(f"status IN ({st_list})")
+        if filters.min_year:
+            where_clauses.append(f"start_year >= {int(filters.min_year)}")
+        if filters.max_year:
+            where_clauses.append(f"start_year <= {int(filters.max_year)}")
+        if filters.min_score:
+            where_clauses.append(f"average_score >= {int(filters.min_score)}")
+        if filters.min_chapters:
+            where_clauses.append(f"chapters >= {int(filters.min_chapters)}")
+        if filters.max_chapters:
+            where_clauses.append(f"chapters <= {int(filters.max_chapters)}")
+        if filters.genres:
+            genres_arr = "ARRAY[" + ",".join(f"'{g}'" for g in filters.genres) + "]"
+            where_clauses.append(f"genres && {genres_arr}")
+        if filters.exclude_genres:
+            ex_genres_arr = "ARRAY[" + ",".join(f"'{g}'" for g in filters.exclude_genres) + "]"
+            where_clauses.append(f"NOT (genres && {ex_genres_arr})")
+        if filters.format_type:
+            raw_fmts = filters.format_type if isinstance(filters.format_type, list) else [filters.format_type]
+            fmt_conditions = []
+            for f in raw_fmts:
+                ft = f.lower()
+                if ft == 'manhwa':
+                    fmt_conditions.append("(tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Manhwa%' OR tags::text ILIKE '%Korean%' OR genres @> ARRAY['Manhwa'] OR site_url ILIKE '%manhwa%')")
+                elif ft == 'manhua':
+                    fmt_conditions.append("(tags::text ILIKE '%Manhua%' OR tags::text ILIKE '%Chinese%' OR tags::text ILIKE '%Ancient China%' OR genres @> ARRAY['Manhua'] OR site_url ILIKE '%manhua%')")
+                elif ft == 'manga':
+                    fmt_conditions.append("NOT (tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Manhwa%' OR tags::text ILIKE '%Manhua%' OR tags::text ILIKE '%Chinese%' OR site_url ILIKE '%manhwa%' OR site_url ILIKE '%manhua%')")
+            if fmt_conditions:
+                where_clauses.append(f"({' OR '.join(fmt_conditions)})")
+
+    where_str = " AND ".join(where_clauses)
+
+    sql = text(f"""
+        SELECT 
+          id, anilist_id, mal_id, mangadex_id, title_romaji, title_english, title_native,
+          synopsis, genres, tags, status, start_year, chapters, volumes,
+          average_score, popularity, cover_image_url, banner_image, site_url
+        FROM manga
+        WHERE {where_str}
+        ORDER BY COALESCE(average_score, 70) DESC, COALESCE(popularity, 0) DESC
+        LIMIT :limit;
+    """)
+
+    result = await session.execute(sql, {"limit": pool_limit})
+    rows = result.all()
+
+    if not rows:
+        return None
+
+    # Filter out seen IDs if provided
+    seen_set = set(seen_ids or [])
+    unseen_rows = [r for r in rows if r.id not in seen_set]
+    
+    # If all candidates seen, reset and pick from full candidate pool
+    target_pool = unseen_rows if unseen_rows else rows
+    chosen = random.choice(target_pool)
+
+    m = Manga()
+    m.id = chosen.id
+    m.anilist_id = chosen.anilist_id
+    m.mal_id = chosen.mal_id
+    m.mangadex_id = chosen.mangadex_id
+    m.title_romaji = chosen.title_romaji
+    m.title_english = chosen.title_english
+    m.title_native = chosen.title_native
+    m.synopsis = chosen.synopsis
+    m.genres = chosen.genres
+    m.tags = chosen.tags
+    m.status = chosen.status
+    m.start_year = chosen.start_year
+    m.chapters = chosen.chapters
+    m.volumes = chosen.volumes
+    m.average_score = chosen.average_score
+    m.popularity = chosen.popularity
+    m.cover_image_url = chosen.cover_image_url
+    m.banner_image = chosen.banner_image
+    m.site_url = chosen.site_url
+
+    sim = round((chosen.average_score or 85) / 100.0, 2)
+    return {"manga": m, "similarity_score": sim}
+
+

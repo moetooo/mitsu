@@ -59,6 +59,20 @@ export default function Header({
           </button>
 
           <button
+            onClick={() => setActiveTab('surprise')}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
+              activeTab === 'surprise'
+                ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
+                : 'text-[var(--text-muted)] hover:text-[var(--text-color)]'
+            }`}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L5.594 15.12a2 2 0 00-1.022.547l-1.022 1.022A2 2 0 004.965 20h14.07a2 2 0 001.415-3.414l-1.022-1.022z" />
+            </svg>
+            Surprise Me
+          </button>
+
+          <button
             onClick={() => setActiveTab('bookmarks')}
             className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer relative ${
               activeTab === 'bookmarks'

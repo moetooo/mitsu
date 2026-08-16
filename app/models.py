@@ -21,6 +21,12 @@ class RecommendRequest(BaseModel):
     limit: int = 12
     page: int = 1
 
+class RouletteRequest(BaseModel):
+    query: Optional[str] = None
+    filters: Optional[RecommendFilters] = None
+    seen_ids: Optional[List[int]] = None
+    limit: int = 40
+
 class RecommendationResult(BaseModel):
     id: int
     anilist_id: Optional[int] = None
