@@ -1,4 +1,5 @@
 import time
+from typing import List
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import RecommendRequest, RecommendResponse, RecommendationResult, RouletteRequest
@@ -12,28 +13,67 @@ router = APIRouter()
 
 @router.post("/roulette", response_model=RecommendationResult)
 async def roulette(request: RouletteRequest, db: AsyncSession = Depends(get_db)):
-    res = await retrieve_roulette_manga(db, filters=request.filters, seen_ids=request.seen_ids, pool_limit=request.limit)
-    if not res:
-        res = await retrieve_roulette_manga(db, filters=None, seen_ids=None, pool_limit=40)
+    results = await retrieve_roulette_manga(
+        db, 
+        filters=request.filters, 
+        seen_ids=request.seen_ids, 
+        pool_limit=1,
+        session_id=request.session_id
+    )
+    if not results:
+        results = await retrieve_roulette_manga(db, filters=None, seen_ids=None, pool_limit=1)
     
-    m = res["manga"]
+    item = results[0] if results else {}
     return RecommendationResult(
-        id=m.id,
-        anilist_id=m.anilist_id,
-        title=m.title_english or m.title_romaji or m.title_native or "Unknown Title",
-        cover_image_url=m.cover_image_url,
-        banner_image=m.banner_image,
-        synopsis=m.synopsis,
-        genres=m.genres,
-        tags=m.tags,
-        status=m.status,
-        start_year=m.start_year,
-        chapters=m.chapters,
-        volumes=m.volumes,
-        average_score=m.average_score,
-        similarity_score=res.get("similarity_score", 0.88),
+        id=item.get("id", 0),
+        anilist_id=item.get("anilist_id"),
+        mal_id=item.get("mal_id"),
+        title=item.get("title", "Unknown Title"),
+        cover_image_url=item.get("cover_image_url"),
+        banner_image=item.get("banner_image"),
+        synopsis=item.get("synopsis"),
+        genres=item.get("genres"),
+        tags=item.get("tags"),
+        status=item.get("status"),
+        start_year=item.get("start_year"),
+        chapters=item.get("chapters"),
+        volumes=item.get("volumes"),
+        average_score=item.get("average_score"),
+        similarity_score=item.get("similarity_score", 0.88),
         llm_reasoning="Discovery Roulette candidate."
     )
+
+@router.post("/roulette/batch", response_model=List[RecommendationResult])
+async def roulette_batch(request: RouletteRequest, db: AsyncSession = Depends(get_db)):
+    count = request.count if request.count > 0 else 5
+    results = await retrieve_roulette_manga(
+        db, 
+        filters=request.filters, 
+        seen_ids=request.seen_ids, 
+        pool_limit=count,
+        session_id=request.session_id
+    )
+    out = []
+    for item in results:
+        out.append(RecommendationResult(
+            id=item.get("id", 0),
+            anilist_id=item.get("anilist_id"),
+            mal_id=item.get("mal_id"),
+            title=item.get("title", "Unknown Title"),
+            cover_image_url=item.get("cover_image_url"),
+            banner_image=item.get("banner_image"),
+            synopsis=item.get("synopsis"),
+            genres=item.get("genres"),
+            tags=item.get("tags"),
+            status=item.get("status"),
+            start_year=item.get("start_year"),
+            chapters=item.get("chapters"),
+            volumes=item.get("volumes"),
+            average_score=item.get("average_score"),
+            similarity_score=item.get("similarity_score", 0.88),
+            llm_reasoning="Discovery Roulette candidate."
+        ))
+    return out
 
 @router.post("/recommend", response_model=RecommendResponse)
 async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db)):

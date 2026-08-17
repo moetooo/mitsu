@@ -25,6 +25,8 @@ class RouletteRequest(BaseModel):
     query: Optional[str] = None
     filters: Optional[RecommendFilters] = None
     seen_ids: Optional[List[int]] = None
+    session_id: Optional[str] = None
+    count: int = 1
     limit: int = 40
 
 class RecommendationResult(BaseModel):

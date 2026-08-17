@@ -1,8 +1,24 @@
+import random
+import hashlib
+import json
+import asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Set
 from ..db_models import Manga
 from ..models import RecommendFilters
+from ..services import cache
+
+ROULETTE_POOL_TARGET = 50
+ROULETTE_REFILL_THRESHOLD = 15
+
+def generate_filter_hash(filters: Optional[RecommendFilters]) -> str:
+    """Generates a stable MD5 fingerprint hash for a filter set"""
+    if not filters:
+        return "default"
+    filter_dict = filters.dict(exclude_none=True)
+    filter_str = json.dumps(filter_dict, sort_keys=True)
+    return hashlib.md5(filter_str.encode()).hexdigest()[:12]
 
 async def retrieve_similar_manga(
     session: AsyncSession,
@@ -17,7 +33,6 @@ async def retrieve_similar_manga(
     where_clauses = ["embedding IS NOT NULL"]
     params: Dict[str, Any] = {"emb": emb_str, "limit": limit, "offset": offset}
     
-    # NSFW Filtering
     allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
     if not allow_nsfw:
         where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")
@@ -115,7 +130,6 @@ async def retrieve_similar_manga(
 
     candidates = []
     for r in rows:
-        # Create a proxy/dummy Manga object or dict matching expectations
         m = Manga()
         m.id = r.id
         m.anilist_id = r.anilist_id
@@ -144,22 +158,118 @@ async def retrieve_similar_manga(
 
     return candidates
 
+# =========================================================
+# PRODUCTION DIVERSITY & NON-ORDER-BY-RANDOM SAMPLING
+# =========================================================
 
-async def retrieve_roulette_manga(
+def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target: int = 50) -> List[Dict[str, Any]]:
+    """Applies lightweight rule-based diversity (genres, format, score bands, hidden gems)"""
+    if not rows:
+        return []
+
+    # 1. Deduplicate seen IDs & Franchise series titles
+    seen_titles: Set[str] = set()
+    filtered_rows = []
+
+    for r in rows:
+        if r.id in exclude_ids:
+            continue
+        stem = (r.title_english or r.title_romaji or str(r.id)).lower().strip()[:15]
+        if stem in seen_titles:
+            continue
+        seen_titles.add(stem)
+        filtered_rows.append(r)
+
+    if not filtered_rows:
+        filtered_rows = rows  # Fallback to full set if over-filtered
+
+    # 2. Separate into High Confidence vs. Hidden Gems
+    high_confidence = []
+    hidden_gems = []
+
+    for r in filtered_rows:
+        score = r.average_score or 75
+        pop = r.popularity or 10000
+        # Hidden gem: solid score >= 75 but lower popularity / higher pop rank number
+        if score >= 75 and pop > 8000:
+            hidden_gems.append(r)
+        else:
+            high_confidence.append(r)
+
+    random.shuffle(high_confidence)
+    random.shuffle(hidden_gems)
+
+    # 3. Target ratio: 80% High Confidence, 20% Hidden Gems
+    target_gems_count = int(max_target * 0.20)
+    selected_gems = hidden_gems[:target_gems_count]
+    selected_conf = high_confidence[: max_target - len(selected_gems)]
+    candidate_pool = selected_conf + selected_gems
+
+    # 4. Enforce Genre Spread (Max 30% per genre)
+    genre_counts: Dict[str, int] = {}
+    diverse_selection = []
+    max_per_genre = max(3, int(max_target * 0.30))
+
+    for r in candidate_pool:
+        primary_genre = r.genres[0] if (r.genres and len(r.genres) > 0) else "General"
+        curr_count = genre_counts.get(primary_genre, 0)
+
+        if curr_count < max_per_genre or len(diverse_selection) < 10:
+            genre_counts[primary_genre] = curr_count + 1
+            diverse_selection.append(r)
+
+        if len(diverse_selection) >= max_target:
+            break
+
+    # If still below target, fill remaining with skipped rows
+    if len(diverse_selection) < max_target:
+        for r in candidate_pool:
+            if r not in diverse_selection:
+                diverse_selection.append(r)
+            if len(diverse_selection) >= max_target:
+                break
+
+    random.shuffle(diverse_selection)
+
+    # Format result dicts
+    out = []
+    for r in diverse_selection:
+        title = r.title_english or r.title_romaji or r.title_native or "Unknown Title"
+        sim_score = round((r.average_score or 85) / 100.0, 2)
+        out.append({
+            "id": r.id,
+            "anilist_id": r.anilist_id,
+            "mal_id": r.mal_id,
+            "title": title,
+            "cover_image_url": r.cover_image_url,
+            "banner_image": r.banner_image,
+            "synopsis": r.synopsis,
+            "genres": r.genres,
+            "tags": r.tags,
+            "status": r.status,
+            "start_year": r.start_year,
+            "chapters": r.chapters,
+            "volumes": r.volumes,
+            "average_score": r.average_score,
+            "similarity_score": sim_score,
+            "llm_reasoning": "Discovery Roulette candidate."
+        })
+
+    return out
+
+
+async def sample_candidates_from_db(
     session: AsyncSession,
     filters: Optional[RecommendFilters] = None,
-    seen_ids: Optional[List[int]] = None,
-    pool_limit: int = 40
-):
-    import random
-
+    sample_limit: int = 150
+) -> List[Any]:
+    """Efficient SQL sampling using MOD hash & pseudo-random offsets without ORDER BY RANDOM()"""
     where_clauses = ["cover_image_url IS NOT NULL"]
-    
-    # NSFW Filtering
+
     allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
     if not allow_nsfw:
         where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")
-    
+
     if filters:
         if filters.status:
             st_list = ", ".join(f"'{s}'" for s in filters.status)
@@ -195,7 +305,9 @@ async def retrieve_roulette_manga(
                 where_clauses.append(f"({' OR '.join(fmt_conditions)})")
 
     where_str = " AND ".join(where_clauses)
+    rand_offset = random.randint(0, 40)
 
+    # NO ORDER BY RANDOM()! Uses fast pseudo-random knuth hash modulo order & offset
     sql = text(f"""
         SELECT 
           id, anilist_id, mal_id, mangadex_id, title_romaji, title_english, title_native,
@@ -203,46 +315,78 @@ async def retrieve_roulette_manga(
           average_score, popularity, cover_image_url, banner_image, site_url
         FROM manga
         WHERE {where_str}
-        ORDER BY COALESCE(average_score, 70) DESC, COALESCE(popularity, 0) DESC
-        LIMIT :limit;
+        ORDER BY MOD(id * 2654435761, 4294967296) DESC
+        LIMIT :limit OFFSET :offset;
     """)
 
-    result = await session.execute(sql, {"limit": pool_limit})
-    rows = result.all()
-
-    if not rows:
-        return None
-
-    # Filter out seen IDs if provided
-    seen_set = set(seen_ids or [])
-    unseen_rows = [r for r in rows if r.id not in seen_set]
-    
-    # If all candidates seen, reset and pick from full candidate pool
-    target_pool = unseen_rows if unseen_rows else rows
-    chosen = random.choice(target_pool)
-
-    m = Manga()
-    m.id = chosen.id
-    m.anilist_id = chosen.anilist_id
-    m.mal_id = chosen.mal_id
-    m.mangadex_id = chosen.mangadex_id
-    m.title_romaji = chosen.title_romaji
-    m.title_english = chosen.title_english
-    m.title_native = chosen.title_native
-    m.synopsis = chosen.synopsis
-    m.genres = chosen.genres
-    m.tags = chosen.tags
-    m.status = chosen.status
-    m.start_year = chosen.start_year
-    m.chapters = chosen.chapters
-    m.volumes = chosen.volumes
-    m.average_score = chosen.average_score
-    m.popularity = chosen.popularity
-    m.cover_image_url = chosen.cover_image_url
-    m.banner_image = chosen.banner_image
-    m.site_url = chosen.site_url
-
-    sim = round((chosen.average_score or 85) / 100.0, 2)
-    return {"manga": m, "similarity_score": sim}
+    result = await session.execute(sql, {"limit": sample_limit, "offset": rand_offset})
+    return result.all()
 
 
+async def refill_roulette_pool(session: AsyncSession, filters: Optional[RecommendFilters], session_id: Optional[str] = None):
+    """Background pool refiller: fetches DB candidates, applies diversity, and pushes to Redis"""
+    filter_hash = generate_filter_hash(filters)
+
+    # Concurrency Lock: Prevent multiple background workers from refilling simultaneously
+    locked = await cache.acquire_refill_lock(filter_hash, ttl=10)
+    if not locked:
+        return
+
+    try:
+        seen_set = set()
+        if session_id:
+            seen_set = await cache.get_session_seen(session_id)
+
+        db_rows = await sample_candidates_from_db(session, filters=filters, sample_limit=150)
+        diverse_items = apply_diversity_filtering(db_rows, exclude_ids=seen_set, max_target=ROULETTE_POOL_TARGET)
+
+        if diverse_items:
+            await cache.push_roulette_pool(filter_hash, diverse_items, ttl=3600)
+    finally:
+        await cache.release_refill_lock(filter_hash)
+
+
+async def retrieve_roulette_manga(
+    session: AsyncSession,
+    filters: Optional[RecommendFilters] = None,
+    seen_ids: Optional[List[int]] = None,
+    pool_limit: int = 1,
+    session_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Production roulette retriever serving instant results from Redis pool or fast DB fallback"""
+    filter_hash = generate_filter_hash(filters)
+
+    # 1. Combine client seen_ids and server session seen set
+    server_seen = await cache.get_session_seen(session_id) if session_id else set()
+    combined_seen = set(seen_ids or []).union(server_seen)
+
+    # 2. Check current Redis candidate pool size
+    pool_size = await cache.get_roulette_pool_size(filter_hash)
+
+    # 3. Asynchronously trigger background pool refill if below threshold
+    if pool_size < ROULETTE_REFILL_THRESHOLD:
+        asyncio.create_task(refill_roulette_pool(session, filters, session_id))
+
+    # 4. Attempt popping from Redis candidate pool
+    results = []
+    if pool_size > 0:
+        popped_items = await cache.pop_roulette_pool(filter_hash, count=pool_limit)
+        # Exclude seen items
+        for item in popped_items:
+            if item["id"] not in combined_seen:
+                results.append(item)
+
+    # 5. Fallback: If Redis empty or popped items were seen, query DB cleanly without ORDER BY RANDOM()
+    if not results:
+        db_rows = await sample_candidates_from_db(session, filters=filters, sample_limit=60)
+        results = apply_diversity_filtering(db_rows, exclude_ids=combined_seen, max_target=pool_limit)
+        if not results and db_rows:
+            # Absolute fallback if all candidates were seen
+            results = apply_diversity_filtering(db_rows, exclude_ids=set(), max_target=pool_limit)
+
+    # 6. Update server-authoritative seen set in Redis
+    if results and session_id:
+        served_ids = [r["id"] for r in results]
+        await cache.add_session_seen(session_id, served_ids)
+
+    return results

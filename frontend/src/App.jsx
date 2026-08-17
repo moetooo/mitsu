@@ -76,6 +76,10 @@ export default function App() {
   const [loadingTrending, setLoadingTrending] = useState(false);
   const [hasMoreTrending, setHasMoreTrending] = useState(true);
 
+  const [sessionId] = useState(() => {
+    return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'session_' + Math.random().toString(36).substring(2, 9);
+  });
+
   const handleSurpriseMe = async () => {
     setLoadingSurprise(true);
 
@@ -87,6 +91,7 @@ export default function App() {
           query: query || null,
           filters: filters,
           seen_ids: seenRouletteIds,
+          session_id: sessionId,
           limit: 40
         })
       });
@@ -94,12 +99,40 @@ export default function App() {
         const data = await res.json();
         setSurpriseManga(data);
         setSeenRouletteIds(prev => [...prev, data.id]);
+        return data;
       }
     } catch (err) {
       console.error('Failed to draw roulette recommendation:', err);
     } finally {
       setLoadingSurprise(false);
     }
+    return null;
+  };
+
+  const fetchRouletteBatch = async (count = 5) => {
+    try {
+      const res = await fetch('http://localhost:8000/roulette/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filters: filters,
+          seen_ids: seenRouletteIds,
+          session_id: sessionId,
+          count: count
+        })
+      });
+      if (res.ok) {
+        const items = await res.json();
+        if (Array.isArray(items) && items.length > 0) {
+          const ids = items.map(i => i.id);
+          setSeenRouletteIds(prev => [...prev, ...ids]);
+          return items;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch roulette batch:', err);
+    }
+    return [];
   };
 
   useEffect(() => {
@@ -401,7 +434,6 @@ export default function App() {
               hasMore={hasMoreTrending}
               onLoadMore={handleLoadMoreTrending}
             />
-
           </div>
         )}
 
@@ -411,6 +443,8 @@ export default function App() {
             manga={surpriseManga}
             loading={loadingSurprise}
             onRefresh={handleSurpriseMe}
+            fetchBatch={fetchRouletteBatch}
+            filters={filters}
             bookmarks={bookmarks}
             onToggleBookmark={handleToggleBookmark}
             onSelectManga={setSelectedManga}
