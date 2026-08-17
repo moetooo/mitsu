@@ -131,7 +131,7 @@ export default function SurpriseView({
     return text.replace(/<[^>]*>?/gm, '');
   };
 
-  // Button red slider positioning
+  // Button red slider positioning (untouched)
   const getRedSliderClass = () => {
     switch (animStage) {
       case 'red-entering':
@@ -146,7 +146,7 @@ export default function SurpriseView({
     }
   };
 
-  // Button default text entrance
+  // Button default text entrance (untouched)
   const getDefaultContentClass = () => {
     switch (animStage) {
       case 'red-entering':
@@ -160,7 +160,7 @@ export default function SurpriseView({
     }
   };
 
-  // Click State Screen (Zen Pebble loading pass) positioning
+  // Click State Screen (Mitsu Mon Glyph ❖) positioning
   const getClickStateScreenClass = () => {
     switch (sliderState) {
       case 'step_1_slide_left':
@@ -218,7 +218,7 @@ export default function SurpriseView({
         </button>
       </div>
 
-      {/* RECTANGULAR BOARDING PASS SLIDER STAGE */}
+      {/* RECTANGULAR BOARDING PASS SLIDER STAGE WITH ROUNDED CORNER CONTAINER CLIPPING */}
       {loading && !activeManga ? (
         <div className="w-full max-w-[660px] mx-auto h-[260px] flex flex-col items-center justify-center space-y-3 bg-[var(--surface-color)]/30 border border-[var(--border-color)] rounded-2xl backdrop-blur-md">
           <div className="w-8 h-8 border-2 border-[var(--accent-vermillion)] border-t-transparent rounded-full animate-spin" />
@@ -227,21 +227,19 @@ export default function SurpriseView({
           </span>
         </div>
       ) : activeManga ? (
-        <div className="max-w-[660px] mx-auto min-h-[260px] relative overflow-hidden">
+        <div className="max-w-[660px] mx-auto min-h-[260px] relative overflow-hidden rounded-2xl border border-[var(--border-color)] shadow-md bg-[var(--surface-color)]/90 backdrop-blur-xl">
           
-          {/* 1. CLICK STATE SCREEN (Zen Pebble pass with Mitsu Mon Glyph ❖ loading indicator) */}
+          {/* 1. CLICK STATE SCREEN (Zen Pebble pass with Mitsu Mon Glyph ❖) */}
           <div 
-            className={`absolute inset-0 flex items-center justify-center rounded-2xl shadow-md bg-[var(--surface-color)]/95 backdrop-blur-xl border border-[var(--border-color)] text-[var(--text-color)] ${getClickStateScreenClass()}`}
+            className={`absolute inset-0 flex items-center justify-center backdrop-blur-xl bg-[var(--surface-color)]/95 ${getClickStateScreenClass()}`}
           >
-            <div className="flex items-center justify-center">
-              <span className="text-2xl text-[var(--accent-vermillion)] animate-pulse select-none font-bold">
-                ❖
-              </span>
-            </div>
+            <span className="text-2xl text-[var(--accent-vermillion)] animate-pulse select-none font-bold">
+              ❖
+            </span>
           </div>
 
           {/* 2. MANGA BOARDING PASS (Slides left on click, then next slides in from right to center) */}
-          <div className={`w-full min-h-[260px] flex flex-col justify-center bg-[var(--surface-color)]/90 backdrop-blur-xl border border-[var(--border-color)] rounded-2xl p-4 sm:p-5 shadow-md ${getCurrentMangaCardClass()}`}>
+          <div className={`w-full min-h-[260px] flex flex-col justify-center p-4 sm:p-5 ${getCurrentMangaCardClass()}`}>
             
             <div className="flex flex-col sm:flex-row gap-5 items-center">
               
