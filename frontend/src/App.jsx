@@ -8,6 +8,7 @@ import MangaDetailModal from './components/MangaDetailModal';
 import SettingsModal from './components/SettingsModal';
 import BookmarksView from './components/BookmarksView';
 import HeroBanner from './components/HeroBanner';
+import SurpriseView from './components/SurpriseView';
 
 const INITIAL_FILTERS = {
   status: [],
@@ -35,7 +36,7 @@ const INITIAL_SETTINGS = {
 
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('explore'); // 'explore' | 'compare' | 'bookmarks'
+  const [activeTab, setActiveTab] = useState('explore'); // 'explore' | 'trending' | 'surprise' | 'bookmarks'
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [mangas, setMangas] = useState([]);
@@ -44,6 +45,11 @@ export default function App() {
 
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+
+  // Surprise Me Discovery States
+  const [surpriseManga, setSurpriseManga] = useState(null);
+  const [loadingSurprise, setLoadingSurprise] = useState(false);
+  const [seenRouletteIds, setSeenRouletteIds] = useState([]);
 
   const [settings, setSettings] = useState(() => {
     const saved = localStorage.getItem('mitsu_settings') || localStorage.getItem('mangamind_settings');
@@ -69,6 +75,71 @@ export default function App() {
   const [trendingMangas, setTrendingMangas] = useState([]);
   const [loadingTrending, setLoadingTrending] = useState(false);
   const [hasMoreTrending, setHasMoreTrending] = useState(true);
+
+  const [sessionId] = useState(() => {
+    return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'session_' + Math.random().toString(36).substring(2, 9);
+  });
+
+  const handleSurpriseMe = async () => {
+    setLoadingSurprise(true);
+
+    try {
+      const res = await fetch('http://localhost:8000/roulette', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          query: query || null,
+          filters: filters,
+          seen_ids: seenRouletteIds,
+          session_id: sessionId,
+          limit: 40
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setSurpriseManga(data);
+        setSeenRouletteIds(prev => [...prev, data.id]);
+        return data;
+      }
+    } catch (err) {
+      console.error('Failed to draw roulette recommendation:', err);
+    } finally {
+      setLoadingSurprise(false);
+    }
+    return null;
+  };
+
+  const fetchRouletteBatch = async (count = 5) => {
+    try {
+      const res = await fetch('http://localhost:8000/roulette/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          filters: filters,
+          seen_ids: seenRouletteIds,
+          session_id: sessionId,
+          count: count
+        })
+      });
+      if (res.ok) {
+        const items = await res.json();
+        if (Array.isArray(items) && items.length > 0) {
+          const ids = items.map(i => i.id);
+          setSeenRouletteIds(prev => [...prev, ...ids]);
+          return items;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to fetch roulette batch:', err);
+    }
+    return [];
+  };
+
+  useEffect(() => {
+    if (activeTab === 'surprise' && !surpriseManga && !loadingSurprise) {
+      handleSurpriseMe();
+    }
+  }, [activeTab]);
 
   const fetchTrendingData = (pageNum = 1, append = false) => {
     if (activeTab !== 'trending') return;
@@ -183,7 +254,7 @@ export default function App() {
 
       setHasMore(newResults.length >= settings.limit);
     } catch (err) {
-      console.error("Search API Exception:", err);
+      console.error('Search error:', err);
     } finally {
       setLoading(false);
     }
@@ -192,24 +263,21 @@ export default function App() {
   const handleLoadMore = () => {
     const nextPage = page + 1;
     setPage(nextPage);
-    handleSearch(null, query, nextPage);
+    handleSearch(null, query, nextPage, filters);
   };
 
   const handleTagClick = (tag) => {
-    setQuery(tag);
-    setActiveTab('explore');
+    const tagQuery = `#${tag}`;
+    setQuery(tagQuery);
     setSelectedManga(null);
-    const updatedFilters = { ...filters, genres: [tag] };
-    setFilters(updatedFilters);
-    handleSearch(null, tag, 1, updatedFilters);
+    setActiveTab('explore');
+    handleSearch(null, tagQuery, 1, filters);
   };
 
-
-
   return (
-    <div className="min-h-screen bg-[var(--bg-color)] text-[var(--text-color)] font-sans-jp washi-paper-overlay relative transition-colors duration-200">
-
-      {/* Main Header Bar */}
+    <div className="min-h-screen bg-[var(--bg-color)] text-[var(--text-color)] washi-paper-overlay font-sans-jp transition-colors duration-200">
+      
+      {/* Dynamic Main Site Header */}
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
@@ -223,7 +291,6 @@ export default function App() {
         {/* EXPLORE TAB VIEW */}
         {activeTab === 'explore' && (
           <>
-            {/* Manga Wallpaper Art Hero Carousel */}
             <div className="pt-2">
               <HeroBanner
                 mangas={mangas}
@@ -367,8 +434,21 @@ export default function App() {
               hasMore={hasMoreTrending}
               onLoadMore={handleLoadMoreTrending}
             />
-
           </div>
+        )}
+
+        {/* SURPRISE ME TAB VIEW */}
+        {activeTab === 'surprise' && (
+          <SurpriseView
+            manga={surpriseManga}
+            loading={loadingSurprise}
+            onRefresh={handleSurpriseMe}
+            fetchBatch={fetchRouletteBatch}
+            filters={filters}
+            bookmarks={bookmarks}
+            onToggleBookmark={handleToggleBookmark}
+            onSelectManga={setSelectedManga}
+          />
         )}
 
         {/* BOOKMARKS TAB VIEW */}

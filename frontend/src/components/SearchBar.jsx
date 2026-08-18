@@ -8,7 +8,8 @@ export default function SearchBar({
   isFilterOpen, 
   setIsFilterOpen, 
   hasActiveFilters,
-  focusStyle = 'glow'
+  focusStyle = 'glow',
+  onSurpriseMe
 }) {
   const [isFocused, setIsFocused] = useState(false);
 
@@ -56,6 +57,19 @@ export default function SearchBar({
           placeholder="Describe plot, mood, or themes... (e.g. dark fantasy action)"
           className="w-full bg-transparent px-4 py-4 text-sm md:text-base font-serif-jp focus:outline-none placeholder:text-[var(--text-muted)] text-[var(--text-color)]"
         />
+
+        {/* Surprise Me Omikuji Button */}
+        {onSurpriseMe && (
+          <button
+            type="button"
+            onClick={onSurpriseMe}
+            className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 mr-2 rounded-xl text-xs font-mono font-bold bg-[var(--bg-color)] border border-[var(--border-color)] text-[var(--text-color)] hover:border-[var(--accent-vermillion)] hover:text-[var(--accent-vermillion)] transition-all cursor-pointer shadow-xs shrink-0"
+            title="Omikuji Fate Draw (Surprise Me)"
+          >
+            <span className="font-serif-jp text-xs text-[var(--accent-vermillion)]">籤</span>
+            <span>Surprise Me</span>
+          </button>
+        )}
 
         {/* Vermillion Circular Search Button */}
         <button 
