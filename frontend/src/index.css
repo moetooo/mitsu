@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+/* Custom Text Selection Highlight */
+::selection {
+  background: var(--accent-vermillion);
+  color: #ffffff;
+}
+::-moz-selection {
+  background: var(--accent-vermillion);
+  color: #ffffff;
+}
+
 :root, :root[data-theme="sumi"] {
   --bg-color: #12151d;
   --surface-color: #1a1e29;
