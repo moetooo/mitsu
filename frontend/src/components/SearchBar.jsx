@@ -8,6 +8,7 @@ export default function SearchBar({
   isFilterOpen, 
   setIsFilterOpen, 
   hasActiveFilters,
+  activeFilterCount = 0,
   focusStyle = 'glow',
   onSurpriseMe
 }) {
@@ -43,6 +44,11 @@ export default function SearchBar({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
           </svg>
           <span className="hidden sm:inline font-sans-jp">Filters</span>
+          {activeFilterCount > 0 && (
+            <span className="ml-1 px-1.5 py-0.2 text-[10px] font-mono font-bold rounded-full bg-[var(--accent-vermillion)] text-white shadow-xs">
+              {activeFilterCount}
+            </span>
+          )}
         </button>
 
         <div className="h-5 w-[1px] bg-[var(--border-color)]" />

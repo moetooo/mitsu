@@ -207,6 +207,19 @@ export default function App() {
     filters.format_type ||
     filters.nsfw;
 
+  const activeFilterCount = [
+    (filters.status && filters.status.length > 0) ? filters.status.length : 0,
+    filters.min_year ? 1 : 0,
+    filters.max_year ? 1 : 0,
+    filters.min_score > 0 ? 1 : 0,
+    filters.min_chapters ? 1 : 0,
+    filters.min_match_pct > 0 ? 1 : 0,
+    (filters.genres && filters.genres.length > 0) ? filters.genres.length : 0,
+    (filters.exclude_genres && filters.exclude_genres.length > 0) ? filters.exclude_genres.length : 0,
+    filters.format_type ? 1 : 0,
+    filters.nsfw ? 1 : 0
+  ].reduce((a, b) => a + b, 0);
+
   const handleToggleBookmark = (mangaToToggle) => {
     setBookmarks(prev => {
       const exists = prev.some(b => b.id === mangaToToggle.id);
@@ -301,6 +314,7 @@ export default function App() {
 
             <div className="space-y-6">
               <SearchBar
+                activeFilterCount={activeFilterCount}
                 query={query}
                 setQuery={setQuery}
                 onSearch={(e, sq) => handleSearch(e, sq, 1)}
