@@ -44,7 +44,16 @@ export default function MangaCard({
         )}
         
         {/* Subtle Dark Bottom Gradient */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-80 group-hover:opacity-90 transition-opacity" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent opacity-70 group-hover:opacity-100 transition-opacity duration-300" />
+
+        {/* Hover Reveal Synopsis */}
+        {manga.synopsis && (
+          <div className="absolute inset-x-0 bottom-0 p-3 pb-4 opacity-0 group-hover:opacity-100 transition-all duration-300 pointer-events-none translate-y-2 group-hover:translate-y-0 ease-out z-10 flex flex-col justify-end">
+            <p className="text-white/95 text-[10px] leading-relaxed line-clamp-3 font-serif-jp drop-shadow-[0_1px_2px_rgba(0,0,0,0.8)]">
+              {manga.synopsis.replace(/<[^>]*>?/gm, '')}
+            </p>
+          </div>
+        )}
 
         {/* Top-Right Corner Rank Badge */}
         {rank !== null && (
