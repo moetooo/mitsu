@@ -64,6 +64,22 @@ export default function SearchBar({
           className="w-full bg-transparent px-4 py-4 text-sm md:text-base font-serif-jp focus:outline-none placeholder:text-[var(--text-muted)] text-[var(--text-color)]"
         />
 
+        {/* Feature 09: Instant Search Clear ("X") Button */}
+        {query && query.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('');
+            }}
+            className="p-1.5 mr-1 text-[var(--text-muted)] hover:text-[var(--accent-vermillion)] transition-colors cursor-pointer rounded-full hover:bg-[var(--bg-color)] shrink-0"
+            title="Clear Search"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
+
         {/* Surprise Me Omikuji Button */}
         {onSurpriseMe && (
           <button
@@ -109,5 +125,3 @@ export default function SearchBar({
     </div>
   );
 }
-
-

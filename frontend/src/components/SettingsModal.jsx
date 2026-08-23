@@ -180,6 +180,41 @@ export default function SettingsModal({ settings, setSettings, isOpen, onClose }
             </div>
           </div>
 
+          {/* User Request: Load More Batch Size Setting */}
+          <div>
+            <div className="flex items-center justify-between mb-1">
+              <label className="text-xs font-mono font-bold text-[var(--text-muted)] uppercase tracking-wider">
+                Load Batch Size
+              </label>
+              <span className="text-[10px] font-mono text-[var(--accent-vermillion)] font-bold">
+                Performance Optimized
+              </span>
+            </div>
+            <p className="text-[10px] text-[var(--text-muted)] font-mono mb-2">
+              Controls number of titles fetched per load. 24 is recommended for ideal rendering speed & grid alignment.
+            </p>
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { count: 12, label: '12 (Fast)' },
+                { count: 24, label: '24 (Optimal ★)' },
+                { count: 36, label: '36 (High)' }
+              ].map(b => (
+                <button
+                  key={b.count}
+                  type="button"
+                  onClick={() => setSettings(prev => ({ ...prev, batchSize: b.count, limit: b.count }))}
+                  className={`p-2.5 rounded-xl border text-xs font-mono transition-all cursor-pointer ${
+                    (settings.batchSize || 24) === b.count
+                      ? 'border-[var(--accent-vermillion)] bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
+                      : 'border-[var(--border-color)] bg-[var(--bg-color)]/50 text-[var(--text-muted)] hover:text-[var(--text-color)]'
+                  }`}
+                >
+                  {b.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
         </div>
 
       </div>

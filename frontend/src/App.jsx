@@ -9,6 +9,7 @@ import SettingsModal from './components/SettingsModal';
 import BookmarksView from './components/BookmarksView';
 import HeroBanner from './components/HeroBanner';
 import SurpriseView from './components/SurpriseView';
+import BackToTop from './components/BackToTop';
 
 const INITIAL_FILTERS = {
   status: [],
@@ -30,11 +31,11 @@ const INITIAL_SETTINGS = {
   stampStyle: 'crest',
   gridSize: 'standard',
   limit: 12,
+  batchSize: 24, // Dynamic load batch size (User Feature Request)
   focusStyle: 'glow', // 'glow' | 'vermillion' | 'subtle' | 'none'
   hoverAccent: 'vermillion', // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
   nsfwBlur: true // Feature 32: Mature/NSFW cover blur safety toggle
 };
-
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('explore'); // 'explore' | 'trending' | 'surprise' | 'bookmarks'
@@ -503,6 +504,9 @@ export default function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
       />
+
+      {/* Feature 08: Back to Top Floating Button */}
+      <BackToTop />
 
     </div>
   );
