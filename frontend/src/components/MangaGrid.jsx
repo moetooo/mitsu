@@ -10,6 +10,8 @@ export default function MangaGrid({
   gridSize = 'standard',
   stampStyle = 'hanko',
   hoverAccent = 'vermillion',
+  nsfwBlur = true,
+  onSelectAuthor = null,
   hasMore = false,
   onLoadMore = null,
   hasSearched = false,
@@ -26,11 +28,17 @@ export default function MangaGrid({
     large: 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-8'
   };
 
+  // Feature 34: Shimmer Paper Skeleton Grid Loading State
   if (loading && mangas.length === 0) {
     return (
       <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
         {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
-          <div key={i} className="aspect-[2/3] bg-[var(--surface-color)] rounded-2xl animate-pulse border border-[var(--border-color)]" />
+          <div 
+            key={i} 
+            className="aspect-[2/3] shimmer-paper-loading rounded-2xl border border-[var(--border-color)] flex flex-col items-center justify-center p-4"
+          >
+            <span className="text-sm font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
+          </div>
         ))}
       </div>
     );
@@ -61,14 +69,14 @@ export default function MangaGrid({
               gridSize={activeGridSize}
               stampStyle={stampStyle}
               hoverAccent={hoverAccent}
+              nsfwBlur={nsfwBlur}
+              onSelectAuthor={onSelectAuthor}
               showMatchPct={showMatchPct}
               rank={showRank ? (idx + 1) : null}
             />
           </div>
         ))}
       </div>
-
-
 
       {hasMore && onLoadMore && (
         <div className="text-center pt-4">

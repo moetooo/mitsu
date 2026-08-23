@@ -15,7 +15,8 @@ export default function MangaDetailModal({
   onSelectManga,
   isBookmarked,
   onToggleBookmark,
-  hoverAccent = 'vermillion'
+  hoverAccent = 'vermillion',
+  nsfwBlur = true
 }) {
   const [similar, setSimilar] = useState([]);
   const [loadingSimilar, setLoadingSimilar] = useState(false);
@@ -23,6 +24,16 @@ export default function MangaDetailModal({
 
   const matchPct = manga?.similarity_score !== undefined ? Math.round(manga.similarity_score * 100) : null;
   const activeHover = hoverBorderMap[hoverAccent] || hoverBorderMap.vermillion;
+
+  // Feature 32: Detect Mature/NSFW content for modal cover blur
+  const isMature = manga ? (
+    manga.is_nsfw || 
+    (manga.genres && manga.genres.some(g => ['hentai', 'ecchi', 'erotica'].includes(g.toLowerCase()))) ||
+    (manga.tags && manga.tags.some(t => {
+      const name = (typeof t === 'string' ? t : t.name || '').toLowerCase();
+      return name.includes('nsfw') || name.includes('ecchi') || name.includes('hentai') || name.includes('erotica');
+    }))
+  ) : false;
 
   const handleShare = () => {
     if (!manga) return;
@@ -88,6 +99,8 @@ export default function MangaDetailModal({
 
   if (!manga) return null;
 
+  const authorName = manga.author || (manga.staff && manga.staff[0]) || null;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
       
@@ -111,12 +124,17 @@ export default function MangaDetailModal({
             {/* Share Button Icon Only */}
             <button
               type="button"
-              className={`p-2 text-[var(--text-muted)] hover:text-[var(--text-color)] bg-[var(--surface-color)] border border-[var(--border-color)] ${activeHover} rounded-full transition-colors cursor-pointer`}
+              onClick={handleShare}
+              className={`p-2 text-[var(--text-muted)] hover:text-[var(--text-color)] bg-[var(--surface-color)] border border-[var(--border-color)] ${activeHover} rounded-full transition-colors cursor-pointer relative`}
               title="Share"
             >
-              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
-              </svg>
+              {copied ? (
+                <span className="text-[10px] font-mono font-bold text-[var(--accent-vermillion)]">Copied!</span>
+              ) : (
+                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" />
+                </svg>
+              )}
             </button>
 
             {/* Bookmark Button */}
@@ -152,7 +170,7 @@ export default function MangaDetailModal({
         {/* Scrollable Body */}
         <div className="flex flex-col md:flex-row md:items-start flex-grow overflow-y-auto overflow-x-hidden min-w-0 max-w-full custom-scrollbar min-h-0">
           
-          {/* Clean Left Column (No Half-Length Border Lines or Double Card Boxes) */}
+          {/* Clean Left Column */}
           <div className="w-full md:w-80 lg:w-[320px] shrink-0 p-5 md:p-6 flex flex-col gap-4 items-center md:items-stretch md:sticky md:top-0 h-fit">
             
             {/* Cover Image & Vertical Genre Stamp Container */}
@@ -167,13 +185,24 @@ export default function MangaDetailModal({
               )}
 
               {/* Framed Print Cover */}
-              <div className="relative w-full max-w-[260px] md:max-w-none aspect-[2/3] rounded-2xl overflow-hidden border border-[var(--border-color)] shadow-lg bg-black/40">
+              <div className="relative group w-full max-w-[260px] md:max-w-none aspect-[2/3] rounded-2xl overflow-hidden border border-[var(--border-color)] shadow-lg bg-black/40">
                 <img 
                   src={manga.cover_image_url} 
                   alt={manga.title}
                   referrerPolicy="no-referrer"
-                  className="w-full h-full object-cover"
+                  className={`w-full h-full object-cover transition-all duration-300 ${
+                    nsfwBlur && isMature ? 'blur-md group-hover:blur-none scale-105' : ''
+                  }`}
                 />
+
+                {/* Feature 32: NSFW Warning Overlay on Modal Cover */}
+                {nsfwBlur && isMature && (
+                  <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none group-hover:opacity-0 transition-opacity">
+                    <span className="px-3 py-1 rounded-full bg-black/80 border border-red-500/50 text-red-400 font-mono text-xs font-bold tracking-widest backdrop-blur-xs">
+                      🔞 MATURE CONTENT
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -202,12 +231,9 @@ export default function MangaDetailModal({
             )}
           </div>
 
-
-
           
           {/* Content Details */}
           <div className="p-6 md:p-8 flex flex-col gap-6 flex-grow min-w-0 max-w-full">
-
             
             <div>
               <h2 className="text-2xl md:text-4xl font-serif-jp font-bold text-[var(--text-color)] mb-3 leading-snug">
@@ -234,6 +260,21 @@ export default function MangaDetailModal({
                   <span className="px-3 py-1 rounded-full bg-[var(--hanko-bg)] text-[var(--accent-vermillion)] border border-[var(--accent-vermillion)] font-bold">
                     ★ {(manga.average_score / 10).toFixed(1)} / 10
                   </span>
+                )}
+
+                {/* Feature 28: Clickable Author Badge inside modal */}
+                {authorName && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (onSelectTag) onSelectTag(authorName);
+                      onClose();
+                    }}
+                    className="px-3 py-1 rounded-full bg-[var(--surface-color)] border border-[var(--accent-indigo)] text-[var(--accent-indigo)] hover:bg-[var(--accent-indigo)] hover:text-white transition-all cursor-pointer font-mono font-bold"
+                    title={`Search all works by ${authorName}`}
+                  >
+                    ✍️ Author: {authorName}
+                  </button>
                 )}
               </div>
             </div>
@@ -287,9 +328,6 @@ export default function MangaDetailModal({
               </div>
             )}
 
-
-
-
             {/* Horizontal More Like This Carousel */}
             <div className="pt-6 border-t border-[var(--border-color)] space-y-3">
               <div className="flex items-center justify-between">
@@ -303,7 +341,7 @@ export default function MangaDetailModal({
               {loadingSimilar ? (
                 <div className="flex gap-3 overflow-x-auto pb-2 no-scrollbar">
                   {[1, 2, 3, 4].map(i => (
-                    <div key={i} className="w-28 sm:w-32 h-44 shrink-0 bg-[var(--bg-color)] rounded-2xl animate-pulse border border-[var(--border-color)]" />
+                    <div key={i} className="w-28 sm:w-32 h-44 shrink-0 shimmer-paper-loading rounded-2xl border border-[var(--border-color)]" />
                   ))}
                 </div>
               ) : similar.length > 0 ? (

@@ -31,7 +31,8 @@ const INITIAL_SETTINGS = {
   gridSize: 'standard',
   limit: 12,
   focusStyle: 'glow', // 'glow' | 'vermillion' | 'subtle' | 'none'
-  hoverAccent: 'vermillion' // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
+  hoverAccent: 'vermillion', // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
+  nsfwBlur: true // Feature 32: Mature/NSFW cover blur safety toggle
 };
 
 
@@ -345,6 +346,8 @@ export default function App() {
                 gridSize={settings.gridSize}
                 stampStyle={settings.stampStyle || 'crest'}
                 hoverAccent={settings.hoverAccent || 'vermillion'}
+                nsfwBlur={settings.nsfwBlur !== false}
+                onSelectAuthor={handleTagClick}
                 hasMore={hasMore}
                 onLoadMore={handleLoadMore}
               />
@@ -490,6 +493,7 @@ export default function App() {
         isBookmarked={selectedManga ? bookmarks.some(b => b.id === selectedManga.id) : false}
         onToggleBookmark={handleToggleBookmark}
         hoverAccent={settings.hoverAccent || 'vermillion'}
+        nsfwBlur={settings.nsfwBlur !== false}
       />
 
       {/* Settings Modal */}
