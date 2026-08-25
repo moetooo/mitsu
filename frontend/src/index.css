@@ -1,5 +1,15 @@
 @import "tailwindcss";
 
+/* Custom Text Selection Highlight */
+::selection {
+  background: var(--accent-vermillion);
+  color: #ffffff;
+}
+::-moz-selection {
+  background: var(--accent-vermillion);
+  color: #ffffff;
+}
+
 :root, :root[data-theme="sumi"] {
   --bg-color: #12151d;
   --surface-color: #1a1e29;
@@ -57,7 +67,11 @@ body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 300ms ease, color 300ms ease, border-color 300ms ease;
+}
+
+:root, body, header, nav, main, aside, section, article {
+  transition: background-color 300ms ease, color 300ms ease, border-color 300ms ease;
 }
 
 h1, h2, h3, .font-serif-jp {
@@ -420,6 +434,28 @@ h1, h2, h3, .font-serif-jp {
 
 .animate-chrono-out { animation: chronoOut 0.35s ease-in forwards; }
 .animate-chrono-in { animation: chronoIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.2) forwards; }
+
+/* Shimmer Paper Skeleton Loading Animation (Feature 34) */
+@keyframes shimmer-paper {
+  0% {
+    background-position: -200% 0;
+  }
+  100% {
+    background-position: 200% 0;
+  }
+}
+
+.shimmer-paper-loading {
+  background: linear-gradient(
+    90deg,
+    var(--surface-color) 0%,
+    var(--border-color) 50%,
+    var(--surface-color) 100%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-paper 1.6s infinite linear;
+}
+
 
 
 

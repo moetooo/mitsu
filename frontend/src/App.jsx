@@ -9,6 +9,7 @@ import SettingsModal from './components/SettingsModal';
 import BookmarksView from './components/BookmarksView';
 import HeroBanner from './components/HeroBanner';
 import SurpriseView from './components/SurpriseView';
+import BackToTop from './components/BackToTop';
 
 const INITIAL_FILTERS = {
   status: [],
@@ -30,10 +31,11 @@ const INITIAL_SETTINGS = {
   stampStyle: 'crest',
   gridSize: 'standard',
   limit: 12,
+  batchSize: 24, // Dynamic load batch size (User Feature Request)
   focusStyle: 'glow', // 'glow' | 'vermillion' | 'subtle' | 'none'
-  hoverAccent: 'vermillion' // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
+  hoverAccent: 'vermillion', // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
+  nsfwBlur: true // Feature 32: Mature/NSFW cover blur safety toggle
 };
-
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('explore'); // 'explore' | 'trending' | 'surprise' | 'bookmarks'
@@ -207,6 +209,19 @@ export default function App() {
     filters.format_type ||
     filters.nsfw;
 
+  const activeFilterCount = [
+    (filters.status && filters.status.length > 0) ? filters.status.length : 0,
+    filters.min_year ? 1 : 0,
+    filters.max_year ? 1 : 0,
+    filters.min_score > 0 ? 1 : 0,
+    filters.min_chapters ? 1 : 0,
+    filters.min_match_pct > 0 ? 1 : 0,
+    (filters.genres && filters.genres.length > 0) ? filters.genres.length : 0,
+    (filters.exclude_genres && filters.exclude_genres.length > 0) ? filters.exclude_genres.length : 0,
+    filters.format_type ? 1 : 0,
+    filters.nsfw ? 1 : 0
+  ].reduce((a, b) => a + b, 0);
+
   const handleToggleBookmark = (mangaToToggle) => {
     setBookmarks(prev => {
       const exists = prev.some(b => b.id === mangaToToggle.id);
@@ -301,6 +316,7 @@ export default function App() {
 
             <div className="space-y-6">
               <SearchBar
+                activeFilterCount={activeFilterCount}
                 query={query}
                 setQuery={setQuery}
                 onSearch={(e, sq) => handleSearch(e, sq, 1)}
@@ -331,6 +347,8 @@ export default function App() {
                 gridSize={settings.gridSize}
                 stampStyle={settings.stampStyle || 'crest'}
                 hoverAccent={settings.hoverAccent || 'vermillion'}
+                nsfwBlur={settings.nsfwBlur !== false}
+                onSelectAuthor={handleTagClick}
                 hasMore={hasMore}
                 onLoadMore={handleLoadMore}
               />
@@ -476,6 +494,7 @@ export default function App() {
         isBookmarked={selectedManga ? bookmarks.some(b => b.id === selectedManga.id) : false}
         onToggleBookmark={handleToggleBookmark}
         hoverAccent={settings.hoverAccent || 'vermillion'}
+        nsfwBlur={settings.nsfwBlur !== false}
       />
 
       {/* Settings Modal */}
@@ -485,6 +504,9 @@ export default function App() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
       />
+
+      {/* Feature 08: Back to Top Floating Button */}
+      <BackToTop />
 
     </div>
   );

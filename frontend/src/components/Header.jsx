@@ -1,3 +1,5 @@
+import { useState, useEffect } from 'react';
+
 export default function Header({ 
   activeTab, 
   setActiveTab, 
@@ -5,8 +7,29 @@ export default function Header({
   onOpenSettings,
   theme = 'sumi'
 }) {
+  const [isVisible, setIsVisible] = useState(true);
+  const [lastScrollY, setLastScrollY] = useState(0);
+
+  useEffect(() => {
+    const handleScroll = () => {
+      const currentScrollY = window.scrollY;
+      
+      // Auto-hide when scrolling down past 50px, reveal when scrolling up
+      if (currentScrollY > lastScrollY && currentScrollY > 50) {
+        setIsVisible(false);
+      } else if (currentScrollY < lastScrollY) {
+        setIsVisible(true);
+      }
+      
+      setLastScrollY(currentScrollY);
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, [lastScrollY]);
+
   return (
-    <header className="sticky top-0 z-40 bg-[var(--bg-color)]/90 backdrop-blur-md border-b border-[var(--border-color)] px-4 md:px-8 py-3.5 transition-colors duration-200">
+    <header className={`sticky top-0 z-40 bg-[var(--bg-color)]/90 backdrop-blur-md border-b border-[var(--border-color)] px-4 md:px-8 py-3.5 transition-all duration-300 ${isVisible ? 'translate-y-0' : '-translate-y-full'}`}>
       <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
         
         {/* Logo */}

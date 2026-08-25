@@ -1,3 +1,5 @@
+import { useState } from 'react';
+
 export default function MangaCard({ 
   manga, 
   onClick, 
@@ -6,8 +8,12 @@ export default function MangaCard({
   gridSize = 'standard',
   hoverAccent = 'vermillion',
   showMatchPct = true,
-  rank = null
+  rank = null,
+  nsfwBlur = true,
+  onSelectAuthor = null
 }) {
+  const [imgLoaded, setImgLoaded] = useState(false);
+
   const matchPct = (showMatchPct && manga.similarity_score !== undefined && manga.similarity_score !== null) 
     ? Math.round(manga.similarity_score * 100) 
     : null;
@@ -20,6 +26,19 @@ export default function MangaCard({
     indigo: 'hover:border-[var(--accent-indigo)]'
   };
 
+  // Feature 32: Detect Explicit NSFW content (Hentai / Erotica / Adult - excluding standard Ecchi)
+  const isMature = (manga.is_nsfw && !manga.genres?.some(g => g.toLowerCase() === 'ecchi')) || 
+    (manga.genres && manga.genres.some(g => {
+      const name = g.toLowerCase();
+      return name === 'hentai' || name === 'erotica' || name === 'adult';
+    })) ||
+    (manga.tags && manga.tags.some(t => {
+      const name = (typeof t === 'string' ? t : t.name || '').toLowerCase();
+      return (name.includes('hentai') || name.includes('erotica') || name.includes('explicit') || name === 'nsfw') && !name.includes('ecchi');
+    }));
+
+  const authorName = manga.author || manga.artist || (manga.staff && manga.staff[0]) || (manga.authors && manga.authors[0]) || null;
+
   return (
     <div
       onClick={() => onClick(manga)}
@@ -28,12 +47,23 @@ export default function MangaCard({
 
       {/* Framed Print Cover Container */}
       <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden bg-black/20 border border-[var(--border-color)]">
+        
+        {/* Feature 34: Shimmer Paper Skeleton Loader */}
+        {!imgLoaded && manga.cover_image_url && (
+          <div className="absolute inset-0 shimmer-paper-loading z-10 flex flex-col items-center justify-center p-4">
+            <span className="text-xs font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
+          </div>
+        )}
+
         {manga.cover_image_url ? (
           <img
             src={manga.cover_image_url}
             alt={manga.title}
             referrerPolicy="no-referrer"
-            className="w-full h-full object-cover transition-transform duration-200 group-hover:scale-105"
+            onLoad={() => setImgLoaded(true)}
+            className={`w-full h-full object-cover transition-all duration-300 group-hover:scale-105 ${
+              nsfwBlur && isMature ? 'blur-md group-hover:blur-none scale-105' : ''
+            }`}
             loading="lazy"
             decoding="async"
           />
@@ -43,8 +73,17 @@ export default function MangaCard({
           </div>
         )}
         
+        {/* Feature 32: Explicit NSFW Safety Warning Badge */}
+        {nsfwBlur && isMature && (
+          <div className="absolute inset-0 flex items-center justify-center z-15 pointer-events-none group-hover:opacity-0 transition-opacity">
+            <span className="px-2.5 py-1 rounded-full bg-black/85 border border-red-500/50 text-red-400 font-mono text-[9px] font-bold tracking-widest uppercase backdrop-blur-xs">
+              EXPLICIT 18+
+            </span>
+          </div>
+        )}
+
         {/* Subtle Dark Bottom Gradient */}
-        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-80 group-hover:opacity-90 transition-opacity" />
+        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-80 group-hover:opacity-90 transition-opacity pointer-events-none" />
 
         {/* Top-Right Corner Rank Badge */}
         {rank !== null && (
@@ -53,21 +92,21 @@ export default function MangaCard({
           </div>
         )}
 
-        {/* Finalized Circular Ink Crest (Symmetrical 28px x 28px Circle) */}
+        {/* Finalized Circular Ink Crest (Symmetrical 28px x 28px Circle) - Hover Only */}
         {matchPct !== null && rank === null && (
-          <div className="absolute top-2.5 right-2.5 stamp-crest z-10">
+          <div className="absolute top-2.5 right-2.5 stamp-crest z-10 opacity-0 group-hover:opacity-100 transition-opacity duration-200 pointer-events-none">
             <span>{matchPct}%</span>
           </div>
         )}
 
-        {/* Bookmark Button (Symmetrical 28px x 28px Circle) */}
+        {/* Bookmark Button (Symmetrical 28px x 28px Circle) - Hover Only */}
         <button
           type="button"
           onClick={(e) => {
             e.stopPropagation();
             onToggleBookmark(manga);
           }}
-          className={`absolute top-2.5 left-2.5 w-7 h-7 rounded-full flex items-center justify-center border transition-all z-20 cursor-pointer ${
+          className={`absolute top-2.5 left-2.5 w-7 h-7 rounded-full flex items-center justify-center border transition-all duration-200 z-20 cursor-pointer opacity-0 group-hover:opacity-100 ${
             isBookmarked 
               ? 'bg-[var(--accent-vermillion)] text-white border-[var(--accent-vermillion)] scale-105 shadow-sm' 
               : 'bg-black/60 text-white/80 border-white/20 hover:text-white hover:bg-black/90'
@@ -90,9 +129,22 @@ export default function MangaCard({
           >
             {manga.title}
           </h3>
+
+          {/* Feature 41: Clickable Author Badge */}
+          {authorName && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (onSelectAuthor) onSelectAuthor(authorName);
+              }}
+              className="text-[10px] font-mono text-[var(--accent-indigo)] hover:underline truncate block max-w-full text-left mt-0.5"
+              title={`View more works by ${authorName}`}
+            >
+              by {authorName}
+            </button>
+          )}
         </div>
-
-
 
         <div className="flex items-center gap-2 text-[11px] text-[var(--text-muted)] font-mono">
           {manga.start_year && <span>{manga.start_year}</span>}

@@ -1,8 +1,19 @@
+import os
+from app.config import settings
 from sentence_transformers import SentenceTransformer
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# Pass HuggingFace authentication token if set in environment
+token = settings.HF_TOKEN or os.getenv("HF_TOKEN") or os.getenv("HUGGING_FACE_HUB_TOKEN")
+model_kwargs = {"token": token} if token else {}
+
+try:
+    model = SentenceTransformer("all-MiniLM-L6-v2", **model_kwargs)
+except Exception:
+    # Fallback to standard initialization if kwarg is unsupported
+    model = SentenceTransformer("all-MiniLM-L6-v2")
+
 executor = ThreadPoolExecutor(max_workers=8)
 
 def generate_embedding_sync(text: str):

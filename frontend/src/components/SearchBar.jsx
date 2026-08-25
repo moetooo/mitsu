@@ -8,6 +8,7 @@ export default function SearchBar({
   isFilterOpen, 
   setIsFilterOpen, 
   hasActiveFilters,
+  activeFilterCount = 0,
   focusStyle = 'glow',
   onSurpriseMe
 }) {
@@ -43,6 +44,11 @@ export default function SearchBar({
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
           </svg>
           <span className="hidden sm:inline font-sans-jp">Filters</span>
+          {activeFilterCount > 0 && (
+            <span className="ml-1 px-1.5 py-0.2 text-[10px] font-mono font-bold rounded-full bg-[var(--accent-vermillion)] text-white shadow-xs">
+              {activeFilterCount}
+            </span>
+          )}
         </button>
 
         <div className="h-5 w-[1px] bg-[var(--border-color)]" />
@@ -57,6 +63,22 @@ export default function SearchBar({
           placeholder="Describe plot, mood, or themes... (e.g. dark fantasy action)"
           className="w-full bg-transparent px-4 py-4 text-sm md:text-base font-serif-jp focus:outline-none placeholder:text-[var(--text-muted)] text-[var(--text-color)]"
         />
+
+        {/* Feature 09: Instant Search Clear ("X") Button */}
+        {query && query.length > 0 && (
+          <button
+            type="button"
+            onClick={() => {
+              setQuery('');
+            }}
+            className="p-1.5 mr-1 text-[var(--text-muted)] hover:text-[var(--accent-vermillion)] transition-colors cursor-pointer rounded-full hover:bg-[var(--bg-color)] shrink-0"
+            title="Clear Search"
+          >
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        )}
 
         {/* Surprise Me Omikuji Button */}
         {onSurpriseMe && (
@@ -103,5 +125,3 @@ export default function SearchBar({
     </div>
   );
 }
-
-
