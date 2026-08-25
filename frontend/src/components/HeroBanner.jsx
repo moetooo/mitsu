@@ -23,13 +23,13 @@ const FALLBACK_BANNERS = [
   },
   {
     id: 3,
-    title: 'Chainsaw Man',
-    genres: ['Action', 'Supernatural', 'Horror'],
-    status: 'RELEASING',
-    start_year: 2018,
-    average_score: 88,
-    synopsis: 'Denji merges with Pochita to become Chainsaw Man, hunting devil threats for Public Safety under Makima.',
-    cover_image_url: 'https://uploads.mangadex.org/covers/a77742b1-b6a4-4f14-b67d-4c07f9970f78/e8d53ef6-234b-4f96-bfae-e28a50f146a8.jpg'
+    title: 'The Horizon',
+    genres: ['Drama', 'Psychological', 'Tragedy'],
+    status: 'FINISHED',
+    start_year: 2016,
+    average_score: 89,
+    synopsis: 'A young boy and girl meet amidst the ruins of a war-torn world, embarking on a quiet journey towards an uncertain horizon.',
+    cover_image_url: 'https://uploads.mangadex.org/covers/12a819b1-ee28-40fa-bf27-1428a1670984/20421e42-70b5-47d2-9742-b9bbfcb3ff6f.jpg'
   },
   {
     id: 4,
@@ -50,17 +50,66 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
 
   const shuffleArray = (arr) => [...arr].sort(() => 0.5 - Math.random());
 
-  // Fetch featured titles or shuffle incoming mangas
+  const processMixBannerItems = (rawItems) => {
+    if (!rawItems || rawItems.length === 0) return FALLBACK_BANNERS;
+
+    // Categorize incoming search/grid items into diverse pools (Popular, Underrated, Acclaimed)
+    const popular = [];
+    const underrated = [];
+    const acclaimed = [];
+
+    rawItems.forEach(item => {
+      const score = item.average_score || 0;
+      const pop = item.popularity || 0;
+
+      if (score >= 80 && (pop < 500 || !pop)) {
+        underrated.push(item);
+      } else if (score >= 85) {
+        acclaimed.push(item);
+      } else {
+        popular.push(item);
+      }
+    });
+
+    const mixed = [];
+    const pick = (arr, count) => {
+      const shuffled = shuffleArray(arr);
+      for (let i = 0; i < Math.min(count, shuffled.length); i++) {
+        if (!mixed.some(m => m.id === shuffled[i].id)) {
+          mixed.push(shuffled[i]);
+        }
+      }
+    };
+
+    // Pick 2 from underrated, 2 from acclaimed, 2 from popular
+    pick(underrated, 2);
+    pick(acclaimed, 2);
+    pick(popular, 2);
+
+    // Fill up to 6 if any pool was short
+    if (mixed.length < 6) {
+      for (const item of shuffleArray(rawItems)) {
+        if (!mixed.some(m => m.id === item.id)) {
+          mixed.push(item);
+          if (mixed.length >= 6) break;
+        }
+      }
+    }
+
+    return shuffleArray(mixed);
+  };
+
+  // Fetch featured titles or process incoming search mangas into randomized mix
   useEffect(() => {
     if (mangas && mangas.length > 0) {
-      setItems(shuffleArray(mangas).slice(0, 6));
+      setItems(processMixBannerItems(mangas));
       setCurrentIndex(0);
     } else {
       fetch('http://localhost:8000/manga/featured')
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data) && data.length > 0) {
-            setItems(shuffleArray(data));
+            setItems(processMixBannerItems(data));
           } else {
             setItems(shuffleArray(FALLBACK_BANNERS));
           }
@@ -87,7 +136,7 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
       className="w-full max-w-6xl mx-auto relative rounded-3xl overflow-hidden border border-[var(--border-color)] shadow-xl bg-[var(--surface-color)] group select-none transition-all duration-300 cursor-pointer hover:border-[var(--accent-vermillion)]"
       title={`Click to view details for ${current.title}`}
     >
-      {/* Background Image Carousel Layer (Atmospheric Blurred Cover Backing - No Hover Scale) */}
+      {/* Background Image Carousel Layer */}
       <div className="relative h-60 sm:h-64 md:h-72 w-full overflow-hidden">
         {items.map((item, idx) => {
           const imgSrc = item.banner_image || item.cover_image_url;
@@ -116,11 +165,11 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
         })}
       </div>
 
-      {/* Floating Info Overlay with Enlarged Exact Cover Art Badge */}
+      {/* Floating Info Overlay with Enlarged Cover Art */}
       <div className="absolute inset-0 z-20 p-4 sm:p-5 md:p-6 flex items-center gap-5 sm:gap-6 text-white drop-shadow-lg max-w-5xl pointer-events-none">
-        {/* Exact Cover Thumbnail (Enlarged Height near Capsule Borders) */}
+        {/* Exact Cover Thumbnail */}
         {current.cover_image_url && (
-          <div className="w-32 h-52 sm:w-38 sm:h-56 md:w-44 md:h-64 rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl shrink-0 bg-black/40">
+          <div className="w-32 h-52 sm:w-38 sm:h-56 md:w-44 md:h-64 rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl shrink-0 bg-black/40 relative group-hover:scale-[1.02] transition-transform">
             <img
               src={current.cover_image_url}
               alt={current.title}

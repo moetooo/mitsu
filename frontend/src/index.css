@@ -67,7 +67,11 @@ body {
   font-family: var(--font-body);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  transition: background-color 0.15s ease, color 0.15s ease;
+  transition: background-color 300ms ease, color 300ms ease, border-color 300ms ease;
+}
+
+:root, body, header, nav, main, aside, section, article {
+  transition: background-color 300ms ease, color 300ms ease, border-color 300ms ease;
 }
 
 h1, h2, h3, .font-serif-jp {

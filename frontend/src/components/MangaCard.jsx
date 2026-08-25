@@ -26,18 +26,18 @@ export default function MangaCard({
     indigo: 'hover:border-[var(--accent-indigo)]'
   };
 
-  // Feature 32: Detect NSFW / Mature content
-  const isMature = manga.is_nsfw || 
+  // Feature 32: Detect Explicit NSFW content (Hentai / Erotica / Adult - excluding standard Ecchi)
+  const isMature = (manga.is_nsfw && !manga.genres?.some(g => g.toLowerCase() === 'ecchi')) || 
     (manga.genres && manga.genres.some(g => {
       const name = g.toLowerCase();
-      return name === 'hentai' || name === 'ecchi' || name === 'erotica';
+      return name === 'hentai' || name === 'erotica' || name === 'adult';
     })) ||
     (manga.tags && manga.tags.some(t => {
       const name = (typeof t === 'string' ? t : t.name || '').toLowerCase();
-      return name.includes('nsfw') || name.includes('ecchi') || name.includes('hentai') || name.includes('erotica');
+      return (name.includes('hentai') || name.includes('erotica') || name.includes('explicit') || name === 'nsfw') && !name.includes('ecchi');
     }));
 
-  const authorName = manga.author || (manga.staff && manga.staff[0]) || null;
+  const authorName = manga.author || manga.artist || (manga.staff && manga.staff[0]) || (manga.authors && manga.authors[0]) || null;
 
   return (
     <div
@@ -73,11 +73,11 @@ export default function MangaCard({
           </div>
         )}
         
-        {/* Feature 32: NSFW Safety Warning Badge */}
+        {/* Feature 32: Explicit NSFW Safety Warning Badge */}
         {nsfwBlur && isMature && (
           <div className="absolute inset-0 flex items-center justify-center z-15 pointer-events-none group-hover:opacity-0 transition-opacity">
-            <span className="px-2.5 py-1 rounded-full bg-black/80 border border-red-500/50 text-red-400 font-mono text-[10px] font-bold tracking-widest backdrop-blur-xs">
-              🔞 MATURE
+            <span className="px-2.5 py-1 rounded-full bg-black/85 border border-red-500/50 text-red-400 font-mono text-[9px] font-bold tracking-widest uppercase backdrop-blur-xs">
+              EXPLICIT 18+
             </span>
           </div>
         )}
@@ -130,7 +130,7 @@ export default function MangaCard({
             {manga.title}
           </h3>
 
-          {/* Feature 28: Clickable Author Badge if available */}
+          {/* Feature 41: Clickable Author Badge */}
           {authorName && (
             <button
               type="button"
@@ -141,7 +141,7 @@ export default function MangaCard({
               className="text-[10px] font-mono text-[var(--accent-indigo)] hover:underline truncate block max-w-full text-left mt-0.5"
               title={`View more works by ${authorName}`}
             >
-              ✍️ {authorName}
+              by {authorName}
             </button>
           )}
         </div>

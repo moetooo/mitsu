@@ -16,26 +16,79 @@ router = APIRouter()
 
 @router.get("/manga/featured", response_model=List[RecommendationResult])
 async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db)):
-    date_str = datetime.utcnow().strftime("%Y-%m-%d")
-    cache_key = f"manga:featured:{date_str}:{limit}"
+    now = datetime.utcnow()
+    slot_minute = (now.minute // 15) * 15
+    time_slot_str = f"{now.strftime('%Y-%m-%d-%H')}-{slot_minute:02d}"
+    cache_key = f"manga:featured_mix:{time_slot_str}:{limit}"
     
     cached_data = await get_cached(cache_key)
     if cached_data:
         return cached_data
 
-    # Retrieve top 60 popular candidates with valid covers from DB
-    stmt = select(Manga).where(Manga.cover_image_url.isnot(None)).order_by(Manga.popularity.desc().nullslast()).limit(60)
-    result = await db.execute(stmt)
-    mangas_pool = list(result.scalars().all())
+    # Pool 1: Top Popular Hits
+    stmt_pop = select(Manga).where(Manga.cover_image_url.isnot(None)).order_by(Manga.popularity.desc().nullslast()).limit(25)
+    res_pop = list((await db.execute(stmt_pop)).scalars().all())
+
+    # Pool 2: Underrated / Hidden Gems (High average_score >= 78, but lower popularity)
+    stmt_underrated = (
+        select(Manga)
+        .where(
+            Manga.cover_image_url.isnot(None),
+            Manga.average_score >= 78,
+            (Manga.popularity < 500) | (Manga.popularity.is_(None))
+        )
+        .order_by(Manga.average_score.desc().nullslast())
+        .limit(25)
+    )
+    res_underrated = list((await db.execute(stmt_underrated)).scalars().all())
+
+    # Pool 3: Critically Acclaimed / High Score (average_score >= 84)
+    stmt_acclaimed = (
+        select(Manga)
+        .where(Manga.cover_image_url.isnot(None), Manga.average_score >= 84)
+        .order_by(Manga.average_score.desc().nullslast())
+        .limit(25)
+    )
+    res_acclaimed = list((await db.execute(stmt_acclaimed)).scalars().all())
+
+    # Fallback pool if DB is small
+    stmt_all = select(Manga).where(Manga.cover_image_url.isnot(None)).limit(50)
+    res_all = list((await db.execute(stmt_all)).scalars().all())
+
+    rng = random.Random(time_slot_str)
     
-    if not mangas_pool:
-        return []
-        
-    # Seed by current UTC date so featured titles are random from DB,
-    # but remain stable across page refreshes throughout the day!
-    rng = random.Random(date_str)
-    selected_mangas = rng.sample(mangas_pool, min(len(mangas_pool), limit))
-    
+    selected_items = []
+    seen_ids = set()
+
+    def pick_from_pool(pool, badge_label, count=2):
+        picked = 0
+        pool_shuffled = pool.copy()
+        rng.shuffle(pool_shuffled)
+        for m in pool_shuffled:
+            if m.id not in seen_ids:
+                seen_ids.add(m.id)
+                selected_items.append((m, badge_label))
+                picked += 1
+                if picked >= count:
+                    break
+
+    # Pick 2 from Popular, 2 from Underrated Gems, 2 from Critically Acclaimed
+    pick_from_pool(res_pop, "Popular Pick", 2)
+    pick_from_pool(res_underrated, "Hidden Gem", 2)
+    pick_from_pool(res_acclaimed, "Critically Acclaimed", 2)
+
+    # Fill remaining up to limit if pools had overlaps
+    if len(selected_items) < limit:
+        rng.shuffle(res_all)
+        for m in res_all:
+            if m.id not in seen_ids:
+                seen_ids.add(m.id)
+                selected_items.append((m, "Featured Title"))
+                if len(selected_items) >= limit:
+                    break
+
+    rng.shuffle(selected_items)
+
     response = [
         RecommendationResult(
             id=m.id,
@@ -53,11 +106,12 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
             volumes=m.volumes,
             average_score=m.average_score,
             similarity_score=0.95,
-            llm_reasoning=None
-        ) for m in selected_mangas
+            llm_reasoning=None,
+            category_badge=badge
+        ) for m, badge in selected_items
     ]
     
-    await set_cached(cache_key, [r.model_dump() for r in response], ttl=86400)
+    await set_cached(cache_key, [r.model_dump() for r in response], ttl=900)
     return response
 
 @router.get("/manga/trending", response_model=List[RecommendationResult])

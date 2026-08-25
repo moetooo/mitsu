@@ -2,11 +2,11 @@ import { useState } from 'react';
 import MangaCard from './MangaCard';
 import SectionDivider from './SectionDivider';
 
-export default function MangaGrid({ 
-  mangas = [], 
-  loading = false, 
-  onCardClick, 
-  bookmarks = [], 
+export default function MangaGrid({
+  mangas = [],
+  loading = false,
+  onCardClick,
+  bookmarks = [],
   onToggleBookmark,
   gridSize = 'standard',
   stampStyle = 'hanko',
@@ -43,8 +43,8 @@ export default function MangaGrid({
     return (
       <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
         {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
-          <div 
-            key={i} 
+          <div
+            key={i}
             className="aspect-[2/3] shimmer-paper-loading rounded-2xl border border-[var(--border-color)] flex flex-col items-center justify-center p-4"
           >
             <span className="text-sm font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
@@ -66,7 +66,7 @@ export default function MangaGrid({
 
   return (
     <div className="space-y-6">
-      
+
       {/* Top Header Bar with Count & Feature 16: Quick Sort Dropdown */}
       {!hideDivider && (
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 border-b border-[var(--border-color)] pb-4 pt-2">
@@ -78,7 +78,7 @@ export default function MangaGrid({
           </div>
 
           {/* Feature 16: Horizontal Sort Pill Toggle Bar */}
-          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full">
+          <div className="flex items-center gap-1.s5 overflow-x-auto no-scrollbar max-w-full">
             <span className="text-[11px] font-mono text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1 hidden md:inline">
               Sort:
             </span>
@@ -93,11 +93,10 @@ export default function MangaGrid({
                   key={opt.id}
                   type="button"
                   onClick={() => setSortBy(opt.id)}
-                  className={`px-3 py-1 rounded-full text-xs font-mono transition-all cursor-pointer whitespace-nowrap ${
-                    sortBy === opt.id
-                      ? 'bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
-                      : 'text-[var(--text-muted)] hover:text-[var(--text-color)] hover:bg-[var(--bg-color)]/60'
-                  }`}
+                  className={`px-3 py-1 rounded-full text-xs font-mono transition-all cursor-pointer whitespace-nowrap ${sortBy === opt.id
+                    ? 'bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
+                    : 'text-[var(--text-muted)] hover:text-[var(--text-color)] hover:bg-[var(--bg-color)]/60'
+                    }`}
                 >
                   {opt.label}
                 </button>
@@ -111,7 +110,7 @@ export default function MangaGrid({
       <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
         {sortedMangas.map((m, idx) => (
           <div key={m.id || idx} className="relative">
-            <MangaCard 
+            <MangaCard
               manga={m}
               onClick={onCardClick}
               isBookmarked={isBookmarked(m.id)}

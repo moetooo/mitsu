@@ -46,6 +46,7 @@ class RecommendationResult(BaseModel):
     average_score: Optional[int] = None
     similarity_score: Optional[float] = None
     llm_reasoning: Optional[str] = None
+    category_badge: Optional[str] = None
 
 class RecommendResponse(BaseModel):
     results: List[RecommendationResult]

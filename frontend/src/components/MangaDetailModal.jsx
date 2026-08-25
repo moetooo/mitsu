@@ -25,13 +25,13 @@ export default function MangaDetailModal({
   const matchPct = manga?.similarity_score !== undefined ? Math.round(manga.similarity_score * 100) : null;
   const activeHover = hoverBorderMap[hoverAccent] || hoverBorderMap.vermillion;
 
-  // Feature 32: Detect Mature/NSFW content for modal cover blur
+  // Feature 32: Detect Explicit NSFW content (Hentai / Erotica / Adult - excluding standard Ecchi)
   const isMature = manga ? (
-    manga.is_nsfw || 
-    (manga.genres && manga.genres.some(g => ['hentai', 'ecchi', 'erotica'].includes(g.toLowerCase()))) ||
+    (manga.is_nsfw && !manga.genres?.some(g => g.toLowerCase() === 'ecchi')) || 
+    (manga.genres && manga.genres.some(g => ['hentai', 'erotica', 'adult'].includes(g.toLowerCase()))) ||
     (manga.tags && manga.tags.some(t => {
       const name = (typeof t === 'string' ? t : t.name || '').toLowerCase();
-      return name.includes('nsfw') || name.includes('ecchi') || name.includes('hentai') || name.includes('erotica');
+      return (name.includes('hentai') || name.includes('erotica') || name.includes('explicit') || name === 'nsfw') && !name.includes('ecchi');
     }))
   ) : false;
 
@@ -198,8 +198,8 @@ export default function MangaDetailModal({
                 {/* Feature 32: NSFW Warning Overlay on Modal Cover */}
                 {nsfwBlur && isMature && (
                   <div className="absolute inset-0 flex items-center justify-center z-10 pointer-events-none group-hover:opacity-0 transition-opacity">
-                    <span className="px-3 py-1 rounded-full bg-black/80 border border-red-500/50 text-red-400 font-mono text-xs font-bold tracking-widest backdrop-blur-xs">
-                      🔞 MATURE CONTENT
+                    <span className="px-3 py-1 rounded-full bg-black/85 border border-red-500/50 text-red-400 font-mono text-xs font-bold tracking-widest uppercase backdrop-blur-xs">
+                      EXPLICIT 18+
                     </span>
                   </div>
                 )}
@@ -262,7 +262,7 @@ export default function MangaDetailModal({
                   </span>
                 )}
 
-                {/* Feature 28: Clickable Author Badge inside modal */}
+                {/* Feature 41: Clickable Author Badge inside modal */}
                 {authorName && (
                   <button
                     type="button"
@@ -273,7 +273,7 @@ export default function MangaDetailModal({
                     className="px-3 py-1 rounded-full bg-[var(--surface-color)] border border-[var(--accent-indigo)] text-[var(--accent-indigo)] hover:bg-[var(--accent-indigo)] hover:text-white transition-all cursor-pointer font-mono font-bold"
                     title={`Search all works by ${authorName}`}
                   >
-                    ✍️ Author: {authorName}
+                    Author: {authorName}
                   </button>
                 )}
               </div>
