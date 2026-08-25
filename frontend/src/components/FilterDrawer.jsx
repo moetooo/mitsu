@@ -234,7 +234,7 @@ export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onR
           onChangeMax={(val) => setFilters(prev => ({ ...prev, max_chapters: val >= 500 ? null : val }))}
         />
 
-        {/* Col 3: Publication Year Ranges & NSFW */}
+        {/* Col 3: Publication Year Ranges */}
         <div className="space-y-2">
           <DualRangeSliderPanel
             title="PUBLICATION YEAR"
@@ -253,19 +253,6 @@ export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onR
             onChangeMin={(val) => setFilters(prev => ({ ...prev, min_year: val <= 1970 ? null : val }))}
             onChangeMax={(val) => setFilters(prev => ({ ...prev, max_year: val >= 2026 ? null : val }))}
           />
-
-          <div className="flex items-center justify-between px-3 py-1.5 bg-[var(--bg-color)]/60 border border-[var(--border-color)] rounded-xl">
-            <span className="text-[11px] font-sans-jp font-bold text-[var(--text-color)]">NSFW / 18+ Titles</span>
-            <button
-              type="button"
-              onClick={() => setFilters(prev => ({ ...prev, nsfw: !prev.nsfw }))}
-              className={`w-8 h-4 rounded-full transition-colors p-0.5 cursor-pointer flex items-center ${
-                filters.nsfw ? 'bg-[var(--accent-vermillion)] justify-end' : 'bg-[var(--border-color)] justify-start'
-              }`}
-            >
-              <div className="w-3 h-3 rounded-full bg-white shadow-xs" />
-            </button>
-          </div>
         </div>
 
       </div>

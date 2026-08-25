@@ -21,8 +21,7 @@ const INITIAL_FILTERS = {
   min_match_pct: 0,
   genres: [],
   exclude_genres: [],
-  format_type: null,
-  nsfw: false
+  format_type: null
 };
 
 const INITIAL_SETTINGS = {
@@ -34,7 +33,8 @@ const INITIAL_SETTINGS = {
   batchSize: 24, // Dynamic load batch size (User Feature Request)
   focusStyle: 'glow', // 'glow' | 'vermillion' | 'subtle' | 'none'
   hoverAccent: 'vermillion', // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
-  nsfwBlur: true // Feature 32: Mature/NSFW cover blur safety toggle
+  allowNsfw: false, // Global 18+ Content Permission in Settings
+  nsfwBlur: true // Mature/NSFW cover blur safety toggle
 };
 
 export default function App() {
@@ -91,7 +91,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query: query || null,
-          filters: filters,
+          filters: { ...filters, nsfw: settings.allowNsfw },
           seen_ids: seenRouletteIds,
           session_id: sessionId,
           limit: 40
@@ -117,7 +117,7 @@ export default function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          filters: filters,
+          filters: { ...filters, nsfw: settings.allowNsfw },
           seen_ids: seenRouletteIds,
           session_id: sessionId,
           count: count
@@ -206,8 +206,8 @@ export default function App() {
     filters.min_match_pct > 0 ||
     (filters.genres && filters.genres.length > 0) ||
     (filters.exclude_genres && filters.exclude_genres.length > 0) ||
-    filters.format_type ||
-    filters.nsfw;
+    filters.format_type;
+
 
   const activeFilterCount = [
     (filters.status && filters.status.length > 0) ? filters.status.length : 0,
@@ -218,8 +218,7 @@ export default function App() {
     filters.min_match_pct > 0 ? 1 : 0,
     (filters.genres && filters.genres.length > 0) ? filters.genres.length : 0,
     (filters.exclude_genres && filters.exclude_genres.length > 0) ? filters.exclude_genres.length : 0,
-    filters.format_type ? 1 : 0,
-    filters.nsfw ? 1 : 0
+    filters.format_type ? 1 : 0
   ].reduce((a, b) => a + b, 0);
 
   const handleToggleBookmark = (mangaToToggle) => {
@@ -249,7 +248,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           query: searchQuery,
-          filters: activeFilters,
+          filters: { ...activeFilters, nsfw: settings.allowNsfw },
           limit: settings.limit,
           page: pageNum
         })
