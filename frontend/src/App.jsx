@@ -274,6 +274,15 @@ export default function App() {
     }
   };
 
+  // Feature 76: 300ms Debounced Auto-Search on Query Input
+  useEffect(() => {
+    if (!query || query.trim().length < 3) return;
+    const timer = setTimeout(() => {
+      handleSearch(null, query, 1, filters);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [query]);
+
   const handleLoadMore = () => {
     const nextPage = page + 1;
     setPage(nextPage);

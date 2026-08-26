@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect, memo } from 'react';
 
-export default function MangaCard({ 
+function MangaCard({ 
   manga, 
   onClick, 
   isBookmarked, 
@@ -13,6 +13,26 @@ export default function MangaCard({
   onSelectAuthor = null
 }) {
   const [imgLoaded, setImgLoaded] = useState(false);
+  const [isNearViewport, setIsNearViewport] = useState(false);
+  const cardRef = useRef(null);
+
+  // Feature 82: IntersectionObserver Prefetching (200px viewport margin)
+  useEffect(() => {
+    if (!cardRef.current) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        entries.forEach((entry) => {
+          if (entry.isIntersecting) {
+            setIsNearViewport(true);
+            observer.disconnect();
+          }
+        });
+      },
+      { rootMargin: '200px' }
+    );
+    observer.observe(cardRef.current);
+    return () => observer.disconnect();
+  }, []);
 
   const matchPct = (showMatchPct && manga.similarity_score !== undefined && manga.similarity_score !== null) 
     ? Math.round(manga.similarity_score * 100) 
@@ -41,6 +61,7 @@ export default function MangaCard({
 
   return (
     <div
+      ref={cardRef}
       onClick={() => onClick(manga)}
       className={`manga-card-item group relative bg-[var(--surface-color)] border border-[var(--border-color)] rounded-2xl p-3 cursor-pointer shadow-sm hover:shadow-md ${hoverBorderMap[hoverAccent] || hoverBorderMap.vermillion} transition-all duration-150 ease-out hover:scale-[1.02] flex flex-col justify-between`}
     >
@@ -55,7 +76,7 @@ export default function MangaCard({
           </div>
         )}
 
-        {manga.cover_image_url ? (
+        {manga.cover_image_url && (isNearViewport || imgLoaded) ? (
           <img
             src={manga.cover_image_url}
             alt={manga.title}
@@ -69,7 +90,7 @@ export default function MangaCard({
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-[var(--text-muted)] font-serif-jp text-xs">
-            No Cover
+            {manga.cover_image_url ? 'Loading...' : 'No Cover'}
           </div>
         )}
         
@@ -172,3 +193,17 @@ export default function MangaCard({
     </div>
   );
 }
+
+// Feature 73: Component Memoization to prevent re-rendering cards unless card props change
+export default memo(MangaCard, (prevProps, nextProps) => {
+  return (
+    prevProps.manga.id === nextProps.manga.id &&
+    prevProps.isBookmarked === nextProps.isBookmarked &&
+    prevProps.nsfwBlur === nextProps.nsfwBlur &&
+    prevProps.gridSize === nextProps.gridSize &&
+    prevProps.hoverAccent === nextProps.hoverAccent &&
+    prevProps.rank === nextProps.rank &&
+    prevProps.showMatchPct === nextProps.showMatchPct &&
+    prevProps.manga.similarity_score === nextProps.manga.similarity_score
+  );
+});
