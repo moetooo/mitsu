@@ -82,6 +82,22 @@ h1, h2, h3, .font-serif-jp {
   font-family: var(--font-body);
 }
 
+/* Feature 78: Hardware-Accelerated CSS GPU Offloading */
+.manga-card-item {
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  perspective: 1000px;
+}
+
+.manga-card-item:hover {
+  will-change: transform, border-color, box-shadow;
+}
+
+.manga-card-item img {
+  will-change: transform, filter;
+  transform: translateZ(0);
+}
+
 /* Custom Lightweight Dynamic Scrollbars (Overriding Browser Defaults Everywhere) */
 ::-webkit-scrollbar {
   width: 8px;

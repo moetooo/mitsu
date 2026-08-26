@@ -94,33 +94,56 @@ export default function SettingsModal({ settings, setSettings, isOpen, onClose }
           </div>
 
 
-          {/* Feature 32: NSFW / Mature Cover Blur Safety Toggle */}
-          <div className="border border-[var(--border-color)] rounded-2xl p-4 bg-[var(--bg-color)]/50 flex items-center justify-between">
-            <div className="space-y-0.5">
-              <div className="flex items-center gap-2">
-                <span className="text-xs font-mono font-bold text-[var(--text-color)] uppercase">
-                  🔞 NSFW Cover Blur Safety
+          {/* Content Preferences & Safety Controls */}
+          <div className="space-y-3 border border-[var(--border-color)] rounded-2xl p-4 bg-[var(--bg-color)]/50">
+            <label className="text-[10px] font-mono font-bold text-[var(--accent-vermillion)] uppercase tracking-wider block">
+              Content Preferences & Security
+            </label>
+
+            {/* Toggle 1: Include 18+ Titles */}
+            <div className="flex items-center justify-between pt-1">
+              <div className="space-y-0.5">
+                <span className="text-xs font-mono font-bold text-[var(--text-color)] uppercase block">
+                  Allow Explicit 18+ Titles
                 </span>
-                <span className="text-[9px] px-1.5 py-0.5 rounded bg-[var(--hanko-bg)] text-[var(--accent-vermillion)] font-mono font-bold">
-                  Feature 32
-                </span>
+                <p className="text-[10px] text-[var(--text-muted)] font-mono">
+                  Include 18+ adult titles in search & recommendation results.
+                </p>
               </div>
-              <p className="text-[11px] text-[var(--text-muted)] font-mono">
-                Applies backdrop blur to mature/NSFW artwork until hovered over.
-              </p>
+              <button
+                type="button"
+                onClick={() => setSettings(prev => ({ ...prev, allowNsfw: !prev.allowNsfw }))}
+                className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer border ${
+                  settings.allowNsfw
+                    ? 'bg-[var(--accent-vermillion)] border-[var(--accent-vermillion)] justify-end'
+                    : 'bg-[var(--surface-color)] border-[var(--border-color)] justify-start'
+                } flex items-center shrink-0`}
+              >
+                <div className="w-4 h-4 rounded-full bg-white shadow-xs" />
+              </button>
             </div>
 
-            <button
-              type="button"
-              onClick={() => setSettings(prev => ({ ...prev, nsfwBlur: !prev.nsfwBlur }))}
-              className={`w-12 h-6 rounded-full p-1 transition-colors cursor-pointer border ${
-                settings.nsfwBlur !== false
-                  ? 'bg-[var(--accent-vermillion)] border-[var(--accent-vermillion)] justify-end'
-                  : 'bg-[var(--surface-color)] border-[var(--border-color)] justify-start'
-              } flex items-center`}
-            >
-              <div className="w-4 h-4 rounded-full bg-white shadow-xs transition-transform" />
-            </button>
+            <div className="border-t border-[var(--border-color)]/50 pt-2.5 flex items-center justify-between">
+              <div className="space-y-0.5">
+                <span className="text-xs font-mono font-bold text-[var(--text-color)] uppercase block">
+                  Blur Explicit Cover Images
+                </span>
+                <p className="text-[10px] text-[var(--text-muted)] font-mono">
+                  Applies backdrop blur to 18+ artwork until hovered over.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSettings(prev => ({ ...prev, nsfwBlur: !prev.nsfwBlur }))}
+                className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer border ${
+                  settings.nsfwBlur !== false
+                    ? 'bg-[var(--accent-vermillion)] border-[var(--accent-vermillion)] justify-end'
+                    : 'bg-[var(--surface-color)] border-[var(--border-color)] justify-start'
+                } flex items-center shrink-0`}
+              >
+                <div className="w-4 h-4 rounded-full bg-white shadow-xs" />
+              </button>
+            </div>
           </div>
 
 
