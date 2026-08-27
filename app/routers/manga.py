@@ -286,8 +286,8 @@ async def get_manga(manga_id: int, db: AsyncSession = Depends(get_db)):
     return detail
 
 @router.get("/manga/{manga_id}/similar", response_model=List[RecommendationResult])
-async def get_similar_manga(manga_id: int, limit: int = 6, db: AsyncSession = Depends(get_db)):
-    cache_key = f"manga:similar:{manga_id}:{limit}"
+async def get_similar_manga(manga_id: int, limit: int = 6, allow_nsfw: bool = False, db: AsyncSession = Depends(get_db)):
+    cache_key = f"manga:similar:{manga_id}:{limit}:{allow_nsfw}"
     cached_data = await get_cached(cache_key)
     if cached_data:
         return cached_data
@@ -302,7 +302,7 @@ async def get_similar_manga(manga_id: int, limit: int = 6, db: AsyncSession = De
     candidates = await retrieve_similar_manga(
         session=db,
         query_embedding=manga.embedding,
-        filters=None,
+        filters={"nsfw": allow_nsfw},
         limit=limit + 1
     )
     

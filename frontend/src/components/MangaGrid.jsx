@@ -30,13 +30,15 @@ export default function MangaGrid({
     large: 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-8'
   };
 
-  // Feature 16: Sort mangas dynamically
-  const sortedMangas = [...mangas].sort((a, b) => {
-    if (sortBy === 'score') return (b.average_score || 0) - (a.average_score || 0);
-    if (sortBy === 'newest') return (b.start_year || 0) - (a.start_year || 0);
-    if (sortBy === 'popular') return (b.popularity || 0) - (a.popularity || 0);
-    return (b.similarity_score || 0) - (a.similarity_score || 0); // best_match
-  });
+  // Feature 16: Sort mangas dynamically (Preserve fetched pagination order for 'best_match')
+  const sortedMangas = sortBy === 'best_match'
+    ? mangas
+    : [...mangas].sort((a, b) => {
+        if (sortBy === 'score') return (b.average_score || 0) - (a.average_score || 0);
+        if (sortBy === 'newest') return (b.start_year || 0) - (a.start_year || 0);
+        if (sortBy === 'popular') return (b.popularity || 0) - (a.popularity || 0);
+        return 0;
+      });
 
   // Feature 34: Shimmer Paper Skeleton Grid Loading State
   if (loading && mangas.length === 0) {
