@@ -503,6 +503,7 @@ export default function App() {
         onToggleBookmark={handleToggleBookmark}
         hoverAccent={settings.hoverAccent || 'vermillion'}
         nsfwBlur={settings.nsfwBlur !== false}
+        allowNsfw={settings.allowNsfw}
       />
 
       {/* Settings Modal */}

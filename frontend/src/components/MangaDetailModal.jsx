@@ -16,7 +16,8 @@ export default function MangaDetailModal({
   isBookmarked,
   onToggleBookmark,
   hoverAccent = 'vermillion',
-  nsfwBlur = true
+  nsfwBlur = true,
+  allowNsfw = false
 }) {
   const [similar, setSimilar] = useState([]);
   const [loadingSimilar, setLoadingSimilar] = useState(false);
@@ -81,7 +82,7 @@ export default function MangaDetailModal({
     const fetchSimilar = async () => {
       setLoadingSimilar(true);
       try {
-        const res = await fetch(`http://localhost:8000/manga/${manga.id}/similar?limit=6`);
+        const res = await fetch(`http://localhost:8000/manga/${manga.id}/similar?limit=6&allow_nsfw=${allowNsfw}`);
         if (res.ok) {
           const data = await res.json();
           if (isMounted) setSimilar(data);
