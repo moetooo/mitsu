@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import MangaCard from './MangaCard';
 import SectionDivider from './SectionDivider';
 
@@ -40,6 +40,59 @@ export default function MangaGrid({
         return 0;
       });
 
+  // Feature 74: Responsive Viewport Virtualization State
+  const gridRef = useRef(null);
+  const [columns, setColumns] = useState(4);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportHeight, setViewportHeight] = useState(800);
+
+  // Dynamic Column Count Calculation based on viewport width & grid density
+  useEffect(() => {
+    const updateDimensions = () => {
+      const w = window.innerWidth;
+      setViewportHeight(window.innerHeight);
+
+      if (activeGridSize === 'compact') {
+        if (w >= 1280) setColumns(6);
+        else if (w >= 1024) setColumns(5);
+        else if (w >= 768) setColumns(4);
+        else if (w >= 640) setColumns(3);
+        else setColumns(2);
+      } else if (activeGridSize === 'large') {
+        if (w >= 768) setColumns(3);
+        else if (w >= 640) setColumns(2);
+        else setColumns(1);
+      } else {
+        // Standard
+        if (w >= 1024) setColumns(4);
+        else if (w >= 768) setColumns(3);
+        else if (w >= 640) setColumns(2);
+        else setColumns(1);
+      }
+    };
+
+    updateDimensions();
+    window.addEventListener('resize', updateDimensions);
+    return () => window.removeEventListener('resize', updateDimensions);
+  }, [activeGridSize]);
+
+  // Window Scroll Listener for Virtual Windowing
+  useEffect(() => {
+    let rAFId = null;
+    const handleScroll = () => {
+      if (rAFId) cancelAnimationFrame(rAFId);
+      rAFId = requestAnimationFrame(() => {
+        setScrollTop(window.scrollY || document.documentElement.scrollTop);
+      });
+    };
+
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => {
+      window.removeEventListener('scroll', handleScroll);
+      if (rAFId) cancelAnimationFrame(rAFId);
+    };
+  }, []);
+
   // Feature 34: Shimmer Paper Skeleton Grid Loading State
   if (loading && mangas.length === 0) {
     return (
@@ -66,8 +119,31 @@ export default function MangaGrid({
     );
   }
 
+  // Feature 74 Virtualization Calculations
+  const estimatedRowHeight = activeGridSize === 'compact' ? 360 : activeGridSize === 'large' ? 520 : 450;
+  const totalRows = Math.ceil(sortedMangas.length / columns);
+  const gridTopOffset = gridRef.current ? gridRef.current.offsetTop : 300;
+
+  // Compute visible row range with overscan (renders ~8-12 cards in viewport)
+  const relativeScroll = Math.max(0, scrollTop - gridTopOffset);
+  const startRow = Math.max(0, Math.floor(relativeScroll / estimatedRowHeight) - 1);
+  const endRow = Math.min(totalRows, Math.ceil((relativeScroll + viewportHeight) / estimatedRowHeight) + 1);
+
+  // Split items into row arrays for grid virtualization
+  const rows = [];
+  for (let r = 0; r < totalRows; r++) {
+    rows.push(sortedMangas.slice(r * columns, (r + 1) * columns));
+  }
+
+  const visibleRows = rows.slice(startRow, endRow);
+  const paddingTop = startRow * estimatedRowHeight;
+  const paddingBottom = Math.max(0, (totalRows - endRow) * estimatedRowHeight);
+
+  // Enable Virtualization when dataset is larger than 12 items
+  const shouldVirtualize = sortedMangas.length > 12;
+
   return (
-    <div className="space-y-6">
+    <div ref={gridRef} className="space-y-6">
 
       {/* Top Header Bar with Count & Feature 16: Quick Sort Dropdown */}
       {!hideDivider && (
@@ -77,10 +153,15 @@ export default function MangaGrid({
             <span className="uppercase tracking-wider font-bold text-[var(--text-color)]">
               Results ({mangas.length})
             </span>
+            {shouldVirtualize && (
+              <span className="text-[10px] bg-[var(--surface-color)] border border-[var(--border-color)] text-[var(--accent-emerald)] px-2 py-0.5 rounded-full font-mono">
+                ⚡ Virtualized ({endRow - startRow} rows rendered)
+              </span>
+            )}
           </div>
 
           {/* Feature 16: Horizontal Sort Pill Toggle Bar */}
-          <div className="flex items-center gap-1.s5 overflow-x-auto no-scrollbar max-w-full">
+          <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full">
             <span className="text-[11px] font-mono text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1 hidden md:inline">
               Sort:
             </span>
@@ -108,26 +189,61 @@ export default function MangaGrid({
         </div>
       )}
 
-      {/* Grid Display */}
-      <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
-        {sortedMangas.map((m, idx) => (
-          <div key={m.id || idx} className="relative">
-            <MangaCard
-              manga={m}
-              onClick={onCardClick}
-              isBookmarked={isBookmarked(m.id)}
-              onToggleBookmark={onToggleBookmark}
-              gridSize={activeGridSize}
-              stampStyle={stampStyle}
-              hoverAccent={hoverAccent}
-              nsfwBlur={nsfwBlur}
-              onSelectAuthor={onSelectAuthor}
-              showMatchPct={showMatchPct}
-              rank={showRank ? (idx + 1) : null}
-            />
+      {/* Feature 74: Virtualized Grid Render Container */}
+      {shouldVirtualize ? (
+        <div style={{ paddingTop: `${paddingTop}px`, paddingBottom: `${paddingBottom}px` }}>
+          <div className="space-y-6">
+            {visibleRows.map((rowItems, rowIndexOffset) => {
+              const actualRowIndex = startRow + rowIndexOffset;
+              return (
+                <div key={actualRowIndex} className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
+                  {rowItems.map((m, colIdx) => {
+                    const globalIdx = actualRowIndex * columns + colIdx;
+                    return (
+                      <div key={m.id || globalIdx} className="relative">
+                        <MangaCard
+                          manga={m}
+                          onClick={onCardClick}
+                          isBookmarked={isBookmarked(m.id)}
+                          onToggleBookmark={onToggleBookmark}
+                          gridSize={activeGridSize}
+                          stampStyle={stampStyle}
+                          hoverAccent={hoverAccent}
+                          nsfwBlur={nsfwBlur}
+                          onSelectAuthor={onSelectAuthor}
+                          showMatchPct={showMatchPct}
+                          rank={showRank ? (globalIdx + 1) : null}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
           </div>
-        ))}
-      </div>
+        </div>
+      ) : (
+        /* Standard Un-virtualized Grid Display for smaller item sets */
+        <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
+          {sortedMangas.map((m, idx) => (
+            <div key={m.id || idx} className="relative">
+              <MangaCard
+                manga={m}
+                onClick={onCardClick}
+                isBookmarked={isBookmarked(m.id)}
+                onToggleBookmark={onToggleBookmark}
+                gridSize={activeGridSize}
+                stampStyle={stampStyle}
+                hoverAccent={hoverAccent}
+                nsfwBlur={nsfwBlur}
+                onSelectAuthor={onSelectAuthor}
+                showMatchPct={showMatchPct}
+                rank={showRank ? (idx + 1) : null}
+              />
+            </div>
+          ))}
+        </div>
+      )}
 
       {hasMore && onLoadMore && (
         <div className="text-center pt-4">

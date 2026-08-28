@@ -1,15 +1,18 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
-import FilterDrawer from './components/FilterDrawer';
 import ComparisonSearch from './components/ComparisonSearch';
 import MangaGrid from './components/MangaGrid';
-import MangaDetailModal from './components/MangaDetailModal';
-import SettingsModal from './components/SettingsModal';
 import BookmarksView from './components/BookmarksView';
 import HeroBanner from './components/HeroBanner';
 import SurpriseView from './components/SurpriseView';
 import BackToTop from './components/BackToTop';
+
+// Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
+const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
+const MangaDetailModal = lazy(() => import('./components/MangaDetailModal'));
+const SettingsModal = lazy(() => import('./components/SettingsModal'));
+
 
 const INITIAL_FILTERS = {
   status: [],
@@ -335,14 +338,15 @@ export default function App() {
                 focusStyle={settings.focusStyle || 'glow'}
               />
 
-
-              <FilterDrawer
-                filters={filters}
-                setFilters={setFilters}
-                isOpen={isFilterOpen}
-                onClose={() => setIsFilterOpen(false)}
-                onReset={() => setFilters(INITIAL_FILTERS)}
-              />
+              <Suspense fallback={null}>
+                <FilterDrawer
+                  filters={filters}
+                  setFilters={setFilters}
+                  isOpen={isFilterOpen}
+                  onClose={() => setIsFilterOpen(false)}
+                  onReset={() => setFilters(INITIAL_FILTERS)}
+                />
+              </Suspense>
             </div>
 
             <main className="pb-20">
@@ -356,16 +360,6 @@ export default function App() {
                 stampStyle={settings.stampStyle || 'crest'}
                 hoverAccent={settings.hoverAccent || 'vermillion'}
                 nsfwBlur={settings.nsfwBlur !== false}
-                onSelectAuthor={handleTagClick}
-                hasMore={hasMore}
-                onLoadMore={handleLoadMore}
-              />
-            </main>
-
-          </>
-        )}
-
-
         {/* TRENDING TAB VIEW */}
         {activeTab === 'trending' && (
           <div className="pt-4 pb-20 space-y-6">
@@ -493,26 +487,30 @@ export default function App() {
 
       </div>
 
-      {/* Manga Detail Modal */}
-      <MangaDetailModal
-        manga={selectedManga}
-        onClose={() => setSelectedManga(null)}
-        onSelectTag={handleTagClick}
-        onSelectManga={setSelectedManga}
-        isBookmarked={selectedManga ? bookmarks.some(b => b.id === selectedManga.id) : false}
-        onToggleBookmark={handleToggleBookmark}
-        hoverAccent={settings.hoverAccent || 'vermillion'}
-        nsfwBlur={settings.nsfwBlur !== false}
-        allowNsfw={settings.allowNsfw}
-      />
+      {/* Feature 75: Lazy-Loaded Manga Detail Modal */}
+      <Suspense fallback={null}>
+        <MangaDetailModal
+          manga={selectedManga}
+          onClose={() => setSelectedManga(null)}
+          onSelectTag={handleTagClick}
+          onSelectManga={setSelectedManga}
+          isBookmarked={selectedManga ? bookmarks.some(b => b.id === selectedManga.id) : false}
+          onToggleBookmark={handleToggleBookmark}
+          hoverAccent={settings.hoverAccent || 'vermillion'}
+          nsfwBlur={settings.nsfwBlur !== false}
+          allowNsfw={settings.allowNsfw}
+        />
+      </Suspense>
 
-      {/* Settings Modal */}
-      <SettingsModal
-        settings={settings}
-        setSettings={setSettings}
-        isOpen={isSettingsOpen}
-        onClose={() => setIsSettingsOpen(false)}
-      />
+      {/* Feature 75: Lazy-Loaded Settings Modal */}
+      <Suspense fallback={null}>
+        <SettingsModal
+          settings={settings}
+          setSettings={setSettings}
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+        />
+      </Suspense>
 
       {/* Feature 08: Back to Top Floating Button */}
       <BackToTop />
