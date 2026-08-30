@@ -39,7 +39,7 @@ async def retrieve_similar_manga(
     
     if filters:
         if filters.status:
-            st_list = ", ".join(f"'{s}'" for s in filters.status)
+            st_list = ", ".join(f"'{s.replace('\'', '\'\'')}'" for s in filters.status)
             where_clauses.append(f"status IN ({st_list})")
         if filters.min_year:
             where_clauses.append(f"start_year >= {int(filters.min_year)}")
@@ -52,10 +52,10 @@ async def retrieve_similar_manga(
         if filters.max_chapters:
             where_clauses.append(f"chapters <= {int(filters.max_chapters)}")
         if filters.genres:
-            genres_arr = "ARRAY[" + ",".join(f"'{g}'" for g in filters.genres) + "]"
+            genres_arr = "ARRAY[" + ",".join(f"'{g.replace('\'', '\'\'')}'" for g in filters.genres) + "]"
             where_clauses.append(f"genres && {genres_arr}")
         if filters.exclude_genres:
-            ex_genres_arr = "ARRAY[" + ",".join(f"'{g}'" for g in filters.exclude_genres) + "]"
+            ex_genres_arr = "ARRAY[" + ",".join(f"'{g.replace('\'', '\'\'')}'" for g in filters.exclude_genres) + "]"
             where_clauses.append(f"NOT (genres && {ex_genres_arr})")
         if filters.format_type:
             raw_fmts = filters.format_type if isinstance(filters.format_type, list) else [filters.format_type]
@@ -272,7 +272,7 @@ async def sample_candidates_from_db(
 
     if filters:
         if filters.status:
-            st_list = ", ".join(f"'{s}'" for s in filters.status)
+            st_list = ", ".join(f"'{s.replace('\'', '\'\'')}'" for s in filters.status)
             where_clauses.append(f"status IN ({st_list})")
         if filters.min_year:
             where_clauses.append(f"start_year >= {int(filters.min_year)}")
@@ -285,10 +285,10 @@ async def sample_candidates_from_db(
         if filters.max_chapters:
             where_clauses.append(f"chapters <= {int(filters.max_chapters)}")
         if filters.genres:
-            genres_arr = "ARRAY[" + ",".join(f"'{g}'" for g in filters.genres) + "]"
+            genres_arr = "ARRAY[" + ",".join(f"'{g.replace('\'', '\'\'')}'" for g in filters.genres) + "]"
             where_clauses.append(f"genres && {genres_arr}")
         if filters.exclude_genres:
-            ex_genres_arr = "ARRAY[" + ",".join(f"'{g}'" for g in filters.exclude_genres) + "]"
+            ex_genres_arr = "ARRAY[" + ",".join(f"'{g.replace('\'', '\'\'')}'" for g in filters.exclude_genres) + "]"
             where_clauses.append(f"NOT (genres && {ex_genres_arr})")
         if filters.format_type:
             raw_fmts = filters.format_type if isinstance(filters.format_type, list) else [filters.format_type]

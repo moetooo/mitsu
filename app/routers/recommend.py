@@ -8,11 +8,13 @@ from ..services.embedding import generate_embedding
 from ..services.retrieval import retrieve_similar_manga, retrieve_roulette_manga
 from ..services.llm import generate_reasoning
 from ..services.cache import get_cached, set_cached, generate_cache_key
+from ..utils.sanitizer import sanitize_search_query, sanitize_recommend_filters
 
 router = APIRouter()
 
 @router.post("/roulette", response_model=RecommendationResult)
 async def roulette(request: RouletteRequest, db: AsyncSession = Depends(get_db)):
+    request.filters = sanitize_recommend_filters(request.filters)
     results = await retrieve_roulette_manga(
         db, 
         filters=request.filters, 
@@ -45,6 +47,7 @@ async def roulette(request: RouletteRequest, db: AsyncSession = Depends(get_db))
 
 @router.post("/roulette/batch", response_model=List[RecommendationResult])
 async def roulette_batch(request: RouletteRequest, db: AsyncSession = Depends(get_db)):
+    request.filters = sanitize_recommend_filters(request.filters)
     count = request.count if request.count > 0 else 5
     results = await retrieve_roulette_manga(
         db, 
@@ -78,6 +81,10 @@ async def roulette_batch(request: RouletteRequest, db: AsyncSession = Depends(ge
 @router.post("/recommend", response_model=RecommendResponse)
 async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db)):
     start_time = time.time()
+    
+    # Sanitize query and filter payload
+    request.query = sanitize_search_query(request.query)
+    request.filters = sanitize_recommend_filters(request.filters)
     
     # 1. Check Cache
     cache_key = generate_cache_key("recommend", request.model_dump())

@@ -56,7 +56,7 @@ class RecommendResponse(BaseModel):
 
 class MangaDetail(BaseModel):
     id: int
-    anilist_id: int
+    anilist_id: Optional[int] = None
     mal_id: Optional[int] = None
     title_romaji: Optional[str] = None
     title_english: Optional[str] = None
