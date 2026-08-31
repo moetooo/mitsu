@@ -299,12 +299,34 @@ async def get_similar_manga(manga_id: int, limit: int = 6, allow_nsfw: bool = Fa
     if not manga or manga.embedding is None:
         raise HTTPException(status_code=404, detail="Manga or embedding not found")
         
-    candidates = await retrieve_similar_manga(
-        session=db,
-        query_embedding=manga.embedding,
-        filters={"nsfw": allow_nsfw},
-        limit=limit + 1
-    )
+    candidates = []
+    
+    if getattr(manga, 'similar_mangas', None):
+        similar_ids = [item["id"] for item in manga.similar_mangas][:limit + 10]
+        stmt_sim = select(Manga).where(Manga.id.in_(similar_ids))
+        res_sim = await db.execute(stmt_sim)
+        sim_mangas_map = {m.id: m for m in res_sim.scalars().all()}
+        
+        for item in manga.similar_mangas:
+            sm_id = item["id"]
+            sm = sim_mangas_map.get(sm_id)
+            if sm and sm.id != manga_id:
+                if not allow_nsfw and sm.genres and any(g in ['Hentai', 'Erotica'] for g in sm.genres):
+                    continue
+                candidates.append({
+                    "manga": sm,
+                    "similarity_score": item.get("score", 0.0)
+                })
+                if len(candidates) >= limit:
+                    break
+
+    if not candidates and manga.embedding is not None:
+        candidates = await retrieve_similar_manga(
+            session=db,
+            query_embedding=manga.embedding,
+            filters={"nsfw": allow_nsfw},
+            limit=limit + 1
+        )
     
     # Filter out the source manga itself and format as RecommendationResult
     results = []
