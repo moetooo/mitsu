@@ -26,6 +26,7 @@ class Manga(Base):
     banner_image = Column(Text)
     site_url = Column(Text)
     embedding = Column(Vector(384))
+    similar_mangas = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=text('now()'))
     updated_at = Column(DateTime(timezone=True), server_default=text('now()'))
 
