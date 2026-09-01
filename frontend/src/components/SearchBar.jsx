@@ -1,4 +1,29 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
+
+const RECENT_QUERIES_KEY = 'mitsu_recent_queries';
+const MAX_RECENT = 5;
+
+function getRecentQueries() {
+  try {
+    const raw = localStorage.getItem(RECENT_QUERIES_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveRecentQuery(query) {
+  if (!query || !query.trim()) return;
+  const trimmed = query.trim();
+  const existing = getRecentQueries().filter(q => q.toLowerCase() !== trimmed.toLowerCase());
+  const updated = [trimmed, ...existing].slice(0, MAX_RECENT);
+  localStorage.setItem(RECENT_QUERIES_KEY, JSON.stringify(updated));
+}
+
+function removeRecentQuery(queryToRemove) {
+  const updated = getRecentQueries().filter(q => q !== queryToRemove);
+  localStorage.setItem(RECENT_QUERIES_KEY, JSON.stringify(updated));
+}
 
 export default function SearchBar({ 
   query, 
@@ -13,6 +38,76 @@ export default function SearchBar({
   onSurpriseMe
 }) {
   const [isFocused, setIsFocused] = useState(false);
+  const [showRecent, setShowRecent] = useState(false);
+  const [recentQueries, setRecentQueries] = useState(getRecentQueries);
+  const dropdownRef = useRef(null);
+  const inputRef = useRef(null);
+
+  // Refresh recent queries from localStorage when dropdown opens
+  useEffect(() => {
+    if (showRecent) {
+      setRecentQueries(getRecentQueries());
+    }
+  }, [showRecent]);
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    function handleClickOutside(e) {
+      if (dropdownRef.current && !dropdownRef.current.contains(e.target)) {
+        setShowRecent(false);
+      }
+    }
+    if (showRecent) {
+      document.addEventListener('mousedown', handleClickOutside);
+      return () => document.removeEventListener('mousedown', handleClickOutside);
+    }
+  }, [showRecent]);
+
+  const handleFocus = () => {
+    setIsFocused(true);
+    // Only show dropdown if input is empty or has little text, and there are recent queries
+    if (getRecentQueries().length > 0) {
+      setShowRecent(true);
+    }
+  };
+
+  const handleBlur = () => {
+    setIsFocused(false);
+    // Delay hiding to allow click on pills
+    setTimeout(() => setShowRecent(false), 200);
+  };
+
+  const handleSubmit = (e) => {
+    e.preventDefault();
+    if (query && query.trim()) {
+      saveRecentQuery(query);
+      setRecentQueries(getRecentQueries());
+    }
+    setShowRecent(false);
+    onSearch(e);
+  };
+
+  const handleRecentClick = (recentQuery) => {
+    setQuery(recentQuery);
+    setShowRecent(false);
+    // Trigger search with the selected recent query
+    saveRecentQuery(recentQuery);
+    setRecentQueries(getRecentQueries());
+    onSearch(null, recentQuery);
+  };
+
+  const handleRemoveRecent = (e, queryToRemove) => {
+    e.stopPropagation();
+    removeRecentQuery(queryToRemove);
+    setRecentQueries(getRecentQueries());
+  };
+
+  const handleClearAllRecent = (e) => {
+    e.stopPropagation();
+    localStorage.removeItem(RECENT_QUERIES_KEY);
+    setRecentQueries([]);
+    setShowRecent(false);
+  };
 
   const focusClassMap = {
     glow: 'focus-within:ring-2 focus-within:ring-[var(--accent-vermillion)]/60 focus-within:border-[var(--accent-vermillion)] focus-within:shadow-[0_0_18px_rgba(195,61,46,0.25)]',
@@ -22,12 +117,17 @@ export default function SearchBar({
     none: 'focus-within:border-[var(--border-color)]'
   };
 
+  // Filter recent queries based on current input (show all when empty)
+  const filteredRecent = query && query.trim()
+    ? recentQueries.filter(q => q.toLowerCase().includes(query.trim().toLowerCase()) && q.toLowerCase() !== query.trim().toLowerCase())
+    : recentQueries;
+
   return (
-    <div className="max-w-3xl mx-auto relative group">
+    <div className="max-w-3xl mx-auto relative group" ref={dropdownRef}>
       
       {/* Search Input Container */}
       <form 
-        onSubmit={(e) => { e.preventDefault(); onSearch(e); }} 
+        onSubmit={handleSubmit} 
         className={`relative flex items-center bg-[var(--surface-color)] border border-[var(--border-color)] rounded-2xl shadow-sm transition-all duration-200 ${focusClassMap[focusStyle] || focusClassMap.glow}`}
       >
         
@@ -55,13 +155,15 @@ export default function SearchBar({
 
         {/* Input Field with Mincho Font Placeholder */}
         <input
+          ref={inputRef}
           type="text"
           value={query}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
+          onFocus={handleFocus}
+          onBlur={handleBlur}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Describe plot, mood, or themes... (e.g. dark fantasy action)"
           className="w-full bg-transparent px-4 py-4 text-sm md:text-base font-serif-jp focus:outline-none placeholder:text-[var(--text-muted)] text-[var(--text-color)]"
+          autoComplete="off"
         />
 
         {/* Feature 09: Instant Search Clear ("X") Button */}
@@ -122,6 +224,57 @@ export default function SearchBar({
           </div>
         )}
       </form>
+
+      {/* Feature 10: Recent Queries Dropdown */}
+      {showRecent && filteredRecent.length > 0 && (
+        <div
+          className="absolute left-0 right-0 top-full mt-2 z-50 bg-[var(--surface-color)] border border-[var(--border-color)] rounded-xl shadow-lg overflow-hidden"
+          style={{ animation: 'recentDropdownIn 0.15s ease-out' }}
+        >
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-2.5 border-b border-[var(--border-color)]">
+            <span className="text-[10px] font-mono uppercase tracking-wider text-[var(--text-muted)]">
+              Recent Searches
+            </span>
+            <button
+              type="button"
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={handleClearAllRecent}
+              className="text-[10px] font-mono text-[var(--text-muted)] hover:text-[var(--accent-vermillion)] transition-colors cursor-pointer"
+            >
+              Clear All
+            </button>
+          </div>
+
+          {/* Recent Query Pills */}
+          <div className="px-3 py-2.5 flex flex-wrap gap-2">
+            {filteredRecent.map((rq, idx) => (
+              <button
+                key={`${rq}-${idx}`}
+                type="button"
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => handleRecentClick(rq)}
+                className="group/pill inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-[var(--bg-color)] border border-[var(--border-color)] text-[var(--text-color)] hover:border-[var(--accent-vermillion)] hover:text-[var(--accent-vermillion)] transition-all cursor-pointer"
+              >
+                <svg className="w-3 h-3 text-[var(--text-muted)] group-hover/pill:text-[var(--accent-vermillion)] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                </svg>
+                <span className="truncate max-w-[180px]">{rq}</span>
+                <span
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(e) => handleRemoveRecent(e, rq)}
+                  className="ml-0.5 p-0.5 rounded-full text-[var(--text-muted)] hover:text-[var(--accent-vermillion)] hover:bg-[var(--surface-hover)] transition-colors"
+                  title="Remove"
+                >
+                  <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </span>
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
