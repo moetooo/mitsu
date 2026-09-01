@@ -360,6 +360,13 @@ export default function App() {
                 stampStyle={settings.stampStyle || 'crest'}
                 hoverAccent={settings.hoverAccent || 'vermillion'}
                 nsfwBlur={settings.nsfwBlur !== false}
+                hasMore={hasMore}
+                onLoadMore={handleLoadMore}
+              />
+            </main>
+          </>
+        )}
+
         {/* TRENDING TAB VIEW */}
         {activeTab === 'trending' && (
           <div className="pt-4 pb-20 space-y-6">

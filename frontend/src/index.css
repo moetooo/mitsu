@@ -451,6 +451,12 @@ h1, h2, h3, .font-serif-jp {
 .animate-chrono-out { animation: chronoOut 0.35s ease-in forwards; }
 .animate-chrono-in { animation: chronoIn 0.35s cubic-bezier(0.175, 0.885, 0.32, 1.2) forwards; }
 
+/* Feature 10: Recent Queries Dropdown Animation */
+@keyframes recentDropdownIn {
+  0% { opacity: 0; transform: translateY(-6px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
 /* Shimmer Paper Skeleton Loading Animation (Feature 34) */
 @keyframes shimmer-paper {
   0% {
