@@ -41,3 +41,8 @@ Thumbs.db
 
 query_db.py
 scratch/
+
+# Local utility & test scripts
+preflight.py
+add_column.py
+precompute_similarities.py

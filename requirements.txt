@@ -10,3 +10,4 @@ redis
 celery
 httpx
 pgvector
+brotli-asgi
