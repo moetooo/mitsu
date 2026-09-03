@@ -112,9 +112,8 @@ export default function MangaGrid({
   if (mangas.length === 0) {
     if (!hasSearched) return null;
     return (
-      <div className="text-center py-20 space-y-3 font-serif-jp">
-        <p className="text-[var(--text-muted)] text-sm">No titles found.</p>
-        <p className="text-[var(--text-muted)] opacity-60 text-xs">Try adjusting your query or filter parameters.</p>
+      <div className="flex flex-col items-center justify-center py-20">
+        <p className="text-[var(--text-muted)] font-serif-jp text-lg">No titles found.</p>
       </div>
     );
   }
