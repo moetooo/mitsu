@@ -5,11 +5,17 @@ from .db import Base
 
 class Manga(Base):
     __tablename__ = "manga"
+    __table_args__ = (
+        UniqueConstraint("anilist_id", "start_year", name="uq_manga_anilist_id"),
+        UniqueConstraint("mal_id", "start_year", name="uq_manga_mal_id"),
+        UniqueConstraint("mangadex_id", "start_year", name="uq_manga_mangadex_id"),
+        {'postgresql_partition_by': 'RANGE (start_year)'}
+    )
 
     id = Column(Integer, primary_key=True, index=True)
-    anilist_id = Column(Integer, unique=True, nullable=True)
-    mal_id = Column(Integer, unique=True, nullable=True)
-    mangadex_id = Column(String, unique=True, nullable=True)
+    anilist_id = Column(Integer, nullable=True)
+    mal_id = Column(Integer, nullable=True)
+    mangadex_id = Column(String, nullable=True)
     title_romaji = Column(Text)
     title_english = Column(Text)
     title_native = Column(Text)
@@ -17,7 +23,7 @@ class Manga(Base):
     genres = Column(ARRAY(Text))
     tags = Column(JSONB) # [{"name": "Survival", "rank": 87}, ...]
     status = Column(Text)
-    start_year = Column(Integer)
+    start_year = Column(Integer, primary_key=True)
     chapters = Column(Integer)
     volumes = Column(Integer)
     average_score = Column(Integer)
@@ -49,8 +55,8 @@ class DiscoveryQueue(Base):
 class RecommendationsEdge(Base):
     __tablename__ = "recommendations_edges"
 
-    manga_id_from = Column(Integer, ForeignKey("manga.id"), primary_key=True)
-    manga_id_to = Column(Integer, ForeignKey("manga.id"), primary_key=True)
+    manga_id_from = Column(Integer, primary_key=True)
+    manga_id_to = Column(Integer, primary_key=True)
     vote_count = Column(Integer)
 
 # Indexes are defined in the schema script or alembic, but we can also define them here:
