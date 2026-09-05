@@ -50,6 +50,7 @@ class RecommendationResult(BaseModel):
 
 class RecommendResponse(BaseModel):
     results: List[RecommendationResult]
+    corrected_query: Optional[str] = None
     query_embedding_ms: Optional[float] = None
     retrieval_ms: Optional[float] = None
     llm_ms: Optional[float] = None

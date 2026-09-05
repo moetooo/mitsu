@@ -7,6 +7,7 @@ from ..db_models import Manga
 from ..models import MangaDetail
 
 from ..utils.sanitizer import sanitize_search_query
+from ..services.search_autocorrect import autocorrect_query
 
 router = APIRouter()
 
@@ -15,6 +16,7 @@ async def search_manga(q: str, db: AsyncSession = Depends(get_db)):
     clean_q = sanitize_search_query(q)
     if not clean_q:
         return []
+    clean_q = await autocorrect_query(clean_q, db)
         
     search_term = f"%{clean_q}%"
     stmt = select(Manga).where(

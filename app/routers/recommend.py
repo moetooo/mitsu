@@ -8,6 +8,7 @@ from ..services.embedding import generate_embedding
 from ..services.retrieval import retrieve_similar_manga, retrieve_roulette_manga
 from ..services.llm import generate_reasoning
 from ..services.cache import get_cached, set_cached, generate_cache_key
+from ..services.search_autocorrect import autocorrect_query
 from ..utils.sanitizer import sanitize_search_query, sanitize_recommend_filters
 
 router = APIRouter()
@@ -85,6 +86,7 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
     # Sanitize query and filter payload
     request.query = sanitize_search_query(request.query)
     request.filters = sanitize_recommend_filters(request.filters)
+    request.query = await autocorrect_query(request.query, db)
     
     # 1. Check Cache
     cache_key = generate_cache_key("recommend", request.model_dump())
@@ -131,6 +133,7 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         
     response = RecommendResponse(
         results=results,
+        corrected_query=request.query,
         query_embedding_ms=query_embedding_ms,
         retrieval_ms=retrieval_ms,
         llm_ms=llm_ms
