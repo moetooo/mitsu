@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import InkWashSpinner from './InkWashSpinner';
 
 export default function SurpriseView({ 
   manga, 
@@ -221,7 +222,7 @@ export default function SurpriseView({
       {/* RECTANGULAR BOARDING PASS SLIDER STAGE WITH ROUNDED CORNER CONTAINER CLIPPING */}
       {loading && !activeManga ? (
         <div className="w-full max-w-[660px] mx-auto h-[260px] flex flex-col items-center justify-center space-y-3 bg-[var(--surface-color)]/30 border border-[var(--border-color)] rounded-2xl backdrop-blur-md">
-          <div className="w-8 h-8 border-2 border-[var(--accent-vermillion)] border-t-transparent rounded-full animate-spin" />
+          <InkWashSpinner size={36} />
           <span className="text-xs font-mono text-[var(--text-muted)] tracking-widest uppercase animate-pulse">
             Consulting Candidate Engine...
           </span>

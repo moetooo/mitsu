@@ -1,16 +1,34 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 
 export default function SettingsModal({ settings, setSettings, isOpen, onClose }) {
+  // Lock background window scroll when modal is active to prevent scroll lag and event thrashing
+  useEffect(() => {
+    if (isOpen) {
+      const originalOverflow = document.body.style.overflow;
+      document.body.style.overflow = 'hidden';
+      return () => {
+        document.body.style.overflow = originalOverflow;
+      };
+    }
+  }, [isOpen]);
+
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
       <div 
-        className="absolute inset-0 bg-black/75 backdrop-blur-sm"
+        className="absolute inset-0 bg-black/80 transition-opacity"
         onClick={onClose}
       />
       
-      <div className="relative bg-[var(--surface-color)] border border-[var(--border-color)] text-[var(--text-color)] w-full max-w-lg rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 z-10 max-h-[90vh] overflow-y-auto custom-scrollbar">
+      <div 
+        className="relative bg-[var(--surface-color)] border border-[var(--border-color)] text-[var(--text-color)] w-full max-w-lg rounded-3xl p-6 sm:p-8 shadow-2xl space-y-6 z-10 max-h-[85vh] overflow-y-auto overscroll-contain custom-scrollbar transform-gpu will-change-transform"
+        style={{
+          transform: 'translateZ(0)',
+          WebkitOverflowScrolling: 'touch',
+          contain: 'paint'
+        }}
+      >
         
         <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-4">
           <div className="flex items-center gap-3">
@@ -203,38 +221,62 @@ export default function SettingsModal({ settings, setSettings, isOpen, onClose }
             </div>
           </div>
 
-          {/* User Request: Load More Batch Size Setting */}
-          <div>
-            <div className="flex items-center justify-between mb-1">
-              <label className="text-xs font-mono font-bold text-[var(--text-muted)] uppercase tracking-wider">
-                Load Batch Size
-              </label>
-              <span className="text-[10px] font-mono text-[var(--accent-vermillion)] font-bold">
-                Performance Optimized
-              </span>
+          {/* User Request: Load More Batch Size Setting & Feature 149 Infinite Scroll */}
+          <div className="space-y-4 border border-[var(--border-color)] rounded-2xl p-4 bg-[var(--bg-color)]/50">
+            <div>
+              <div className="flex items-center justify-between mb-1">
+                <label className="text-xs font-mono font-bold text-[var(--accent-vermillion)] uppercase tracking-wider">
+                  Load Batch Size
+                </label>
+                <span className="text-[10px] font-mono text-[var(--accent-vermillion)] font-bold">
+                  Performance Optimized
+                </span>
+              </div>
+              <p className="text-[10px] text-[var(--text-muted)] font-mono mb-2">
+                Controls number of titles fetched per load. 24 is recommended for ideal rendering speed & grid alignment.
+              </p>
+              <div className="grid grid-cols-3 gap-3">
+                {[
+                  { count: 12, label: '12 (Fast)' },
+                  { count: 24, label: '24 (Optimal ★)' },
+                  { count: 36, label: '36 (High)' }
+                ].map(b => (
+                  <button
+                    key={b.count}
+                    type="button"
+                    onClick={() => setSettings(prev => ({ ...prev, batchSize: b.count, limit: b.count }))}
+                    className={`p-2.5 rounded-xl border text-xs font-mono transition-all cursor-pointer ${
+                      (settings.batchSize || 24) === b.count
+                        ? 'border-[var(--accent-vermillion)] bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
+                        : 'border-[var(--border-color)] bg-[var(--bg-color)]/50 text-[var(--text-muted)] hover:text-[var(--text-color)]'
+                    }`}
+                  >
+                    {b.label}
+                  </button>
+                ))}
+              </div>
             </div>
-            <p className="text-[10px] text-[var(--text-muted)] font-mono mb-2">
-              Controls number of titles fetched per load. 24 is recommended for ideal rendering speed & grid alignment.
-            </p>
-            <div className="grid grid-cols-3 gap-3">
-              {[
-                { count: 12, label: '12 (Fast)' },
-                { count: 24, label: '24 (Optimal ★)' },
-                { count: 36, label: '36 (High)' }
-              ].map(b => (
-                <button
-                  key={b.count}
-                  type="button"
-                  onClick={() => setSettings(prev => ({ ...prev, batchSize: b.count, limit: b.count }))}
-                  className={`p-2.5 rounded-xl border text-xs font-mono transition-all cursor-pointer ${
-                    (settings.batchSize || 24) === b.count
-                      ? 'border-[var(--accent-vermillion)] bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
-                      : 'border-[var(--border-color)] bg-[var(--bg-color)]/50 text-[var(--text-muted)] hover:text-[var(--text-color)]'
-                  }`}
-                >
-                  {b.label}
-                </button>
-              ))}
+
+            <div className="border-t border-[var(--border-color)]/50 pt-3 flex items-center justify-between">
+              <div className="space-y-0.5">
+                <span className="text-xs font-mono font-bold text-[var(--text-color)] uppercase block">
+                  Infinite Scroll Sentinel
+                </span>
+                <p className="text-[10px] text-[var(--text-muted)] font-mono">
+                  Automatically auto-fetch next page on scroll using viewport sentinel.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSettings(prev => ({ ...prev, infiniteScroll: prev.infiniteScroll === false ? true : false }))}
+                className={`w-11 h-6 rounded-full p-1 transition-colors cursor-pointer border ${
+                  settings.infiniteScroll !== false
+                    ? 'bg-[var(--accent-vermillion)] border-[var(--accent-vermillion)] justify-end'
+                    : 'bg-[var(--surface-color)] border-[var(--border-color)] justify-start'
+                } flex items-center shrink-0`}
+              >
+                <div className="w-4 h-4 rounded-full bg-white shadow-xs" />
+              </button>
             </div>
           </div>
 

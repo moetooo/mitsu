@@ -37,7 +37,8 @@ const INITIAL_SETTINGS = {
   focusStyle: 'glow', // 'glow' | 'vermillion' | 'subtle' | 'none'
   hoverAccent: 'vermillion', // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
   allowNsfw: false, // Global 18+ Content Permission in Settings
-  nsfwBlur: true // Mature/NSFW cover blur safety toggle
+  nsfwBlur: true, // Mature/NSFW cover blur safety toggle
+  infiniteScroll: true // Feature 149: Infinite scroll with IntersectionObserver sentinel
 };
 
 export default function App() {
@@ -353,6 +354,7 @@ export default function App() {
               <MangaGrid
                 mangas={mangas}
                 loading={loading}
+                hasSearched={searched}
                 onCardClick={setSelectedManga}
                 bookmarks={bookmarks}
                 onToggleBookmark={handleToggleBookmark}
@@ -362,6 +364,7 @@ export default function App() {
                 nsfwBlur={settings.nsfwBlur !== false}
                 hasMore={hasMore}
                 onLoadMore={handleLoadMore}
+                infiniteScroll={settings.infiniteScroll !== false}
               />
             </main>
           </>
@@ -460,6 +463,7 @@ export default function App() {
               showMatchPct={false}
               hasMore={hasMoreTrending}
               onLoadMore={handleLoadMoreTrending}
+              infiniteScroll={settings.infiniteScroll !== false}
             />
           </div>
         )}
