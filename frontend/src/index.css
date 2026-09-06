@@ -289,6 +289,20 @@ h1, h2, h3, .font-serif-jp {
   animation: rotate360 0.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 
+/* Serene Zen Breathing Fade (Fade in Fade out for loaders) */
+@keyframes zenBreatheFade {
+  0%, 100% {
+    opacity: 0.15;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.animate-zen-breathe {
+  animation: zenBreatheFade 1.6s ease-in-out infinite;
+}
+
 /* 1. Equal Speed & Smooth Ticket Dispenser Conveyor */
 @keyframes conveyorOut {
   0% { transform: translateY(0); opacity: 1; }

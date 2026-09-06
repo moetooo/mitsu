@@ -1,5 +1,8 @@
 import { useState, useRef, useEffect, memo } from 'react';
 
+// Global memory cache of decoded / loaded cover image URLs across card mounts
+const loadedCoverCache = new Set();
+
 function MangaCard({ 
   manga, 
   onClick, 
@@ -12,13 +15,14 @@ function MangaCard({
   nsfwBlur = true,
   onSelectAuthor = null
 }) {
-  const [imgLoaded, setImgLoaded] = useState(false);
-  const [isNearViewport, setIsNearViewport] = useState(false);
+  const isCoverCached = Boolean(manga.cover_image_url && loadedCoverCache.has(manga.cover_image_url));
+  const [imgLoaded, setImgLoaded] = useState(isCoverCached);
+  const [isNearViewport, setIsNearViewport] = useState(isCoverCached);
   const cardRef = useRef(null);
 
-  // Feature 82: IntersectionObserver Prefetching (200px viewport margin)
+  // Feature 82: IntersectionObserver Prefetching (400px margin for silky smooth pre-load)
   useEffect(() => {
-    if (!cardRef.current) return;
+    if (isCoverCached || !cardRef.current) return;
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -28,11 +32,18 @@ function MangaCard({
           }
         });
       },
-      { rootMargin: '200px' }
+      { rootMargin: '400px' }
     );
     observer.observe(cardRef.current);
     return () => observer.disconnect();
-  }, []);
+  }, [manga.cover_image_url, isCoverCached]);
+
+  const handleImageLoaded = () => {
+    if (manga.cover_image_url) {
+      loadedCoverCache.add(manga.cover_image_url);
+    }
+    setImgLoaded(true);
+  };
 
   const matchPct = (showMatchPct && manga.similarity_score !== undefined && manga.similarity_score !== null) 
     ? Math.round(manga.similarity_score * 100) 
@@ -63,6 +74,7 @@ function MangaCard({
     <div
       ref={cardRef}
       onClick={() => onClick(manga)}
+      style={{ contentVisibility: 'auto', containIntrinsicSize: '0 380px' }}
       className={`manga-card-item group relative bg-[var(--surface-color)] border border-[var(--border-color)] rounded-2xl p-3 cursor-pointer shadow-sm hover:shadow-md ${hoverBorderMap[hoverAccent] || hoverBorderMap.vermillion} transition-all duration-150 ease-out hover:scale-[1.02] flex flex-col justify-between`}
     >
 
@@ -81,7 +93,7 @@ function MangaCard({
             src={manga.cover_image_url}
             alt={manga.title}
             referrerPolicy="no-referrer"
-            onLoad={() => setImgLoaded(true)}
+            onLoad={handleImageLoaded}
             className={`w-full h-full object-cover transition-all duration-300 group-hover:scale-105 ${
               nsfwBlur && isMature ? 'blur-md group-hover:blur-none scale-105' : ''
             }`}
