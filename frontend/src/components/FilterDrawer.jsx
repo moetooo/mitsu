@@ -1,10 +1,46 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 
-const GENRE_OPTIONS = [
-  "Action", "Adventure", "Comedy", "Drama", "Fantasy", "Horror", 
-  "Mystery", "Psychological", "Romance", "Sci-Fi", "Slice of Life", 
-  "Sports", "Supernatural", "Thriller", "Isekai", "Mecha", "Tragedy"
+export const FILTER_CATEGORIES = [
+  {
+    id: 'core',
+    name: "Core Genres",
+    tagline: "Story Archetypes",
+    options: [
+      "Action", "Adventure", "Comedy", "Drama", "Fantasy", 
+      "Horror", "Mystery", "Psychological", "Sci-Fi", 
+      "Slice of Life", "Supernatural", "Thriller", "Tragedy"
+    ]
+  },
+  {
+    id: 'demographics',
+    name: "Demographics",
+    tagline: "Target Demographics",
+    options: [
+      "Shounen", "Shoujo", "Seinen", "Josei"
+    ]
+  },
+  {
+    id: 'romance',
+    name: "Romance & Relationships",
+    tagline: "Romance • BL • GL",
+    options: [
+      "Romance", "Boys' Love", "Girls' Love", "Harem", "Reverse Harem", 
+      "Love Triangle", "Ecchi"
+    ]
+  },
+  {
+    id: 'themes',
+    name: "Themes & Settings",
+    tagline: "Themes & Settings",
+    options: [
+      "Isekai", "Mecha", "Sports", "Historical", "Music", 
+      "School Life", "Reincarnation", "Martial Arts", "Super Power", 
+      "Survival", "Magic", "Crime", "Medical"
+    ]
+  }
 ];
+
+const ALL_FILTER_OPTIONS = Array.from(new Set(FILTER_CATEGORIES.flatMap(c => c.options)));
 
 function DualRangeSliderPanel({ title, minVal, maxVal, absoluteMin, absoluteMax, step = 1, ticks, onChangeMin, onChangeMax, minLabel = "Min", maxLabel = "Max" }) {
   const minPercent = Math.max(0, Math.min(100, ((minVal - absoluteMin) / (absoluteMax - absoluteMin)) * 100));
@@ -84,6 +120,14 @@ function DualRangeSliderPanel({ title, minVal, maxVal, absoluteMin, absoluteMax,
 
 export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onReset }) {
   if (!isOpen) return null;
+
+  const [activeCategoryTab, setActiveCategoryTab] = useState('all');
+  const [tagQuery, setTagQuery] = useState('');
+
+  const displayedCategories = useMemo(() => {
+    if (activeCategoryTab === 'all') return FILTER_CATEGORIES;
+    return FILTER_CATEGORIES.filter(c => c.id === activeCategoryTab);
+  }, [activeCategoryTab]);
 
   const toggleGenre = (g, type) => {
     setFilters(prev => {
@@ -257,40 +301,158 @@ export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onR
 
       </div>
 
-      {/* Genres Selection */}
-      <div className="space-y-1.5 border-t border-[var(--border-color)] pt-2.5">
-        <div className="flex items-center justify-between">
-          <label className="text-[10px] font-mono font-bold text-[var(--text-muted)] uppercase tracking-wider">
-            Genres (Include / Exclude)
-          </label>
+      {/* Categories & Genres Selection */}
+      <div className="space-y-3 border-t border-[var(--border-color)] pt-3.5">
+        {/* Header & Sub-Tabs */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <label className="text-[10px] font-mono font-bold text-[var(--text-muted)] uppercase tracking-wider">
+              Manga Categories & Genres
+            </label>
+          </div>
+
+          {/* Tag search input (no emojis) */}
+          <div className="relative w-full sm:w-48">
+            <input 
+              type="text"
+              placeholder="Search genres and tags..."
+              value={tagQuery}
+              onChange={(e) => setTagQuery(e.target.value)}
+              className="w-full bg-[var(--bg-color)] border border-[var(--border-color)] rounded-xl px-2.5 py-1 text-xs font-mono text-[var(--text-color)] placeholder:text-[var(--text-muted)] focus:outline-none focus:border-[var(--accent-vermillion)] transition-colors"
+            />
+            {tagQuery && (
+              <button 
+                type="button"
+                onClick={() => setTagQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-[var(--text-muted)] hover:text-white cursor-pointer"
+              >
+                ✕
+              </button>
+            )}
+          </div>
         </div>
-        <div className="flex flex-wrap gap-1.5 pt-0.5">
-          {GENRE_OPTIONS.map(g => {
-            const isInc = (filters.genres || []).includes(g);
-            const isExc = (filters.exclude_genres || []).includes(g);
+
+        {/* Category Navigation Pills */}
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
+          <button
+            type="button"
+            onClick={() => setActiveCategoryTab('all')}
+            className={`px-3 py-1 rounded-full text-[11px] font-mono whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+              activeCategoryTab === 'all'
+                ? 'bg-[var(--text-color)] text-[var(--bg-color)] font-bold shadow-xs'
+                : 'bg-[var(--bg-color)] border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-color)]'
+            }`}
+          >
+            <span>All Categories</span>
+            <span className="text-[9px] opacity-75">({ALL_FILTER_OPTIONS.length})</span>
+          </button>
+
+          {FILTER_CATEGORIES.map(cat => {
+            const catInc = cat.options.filter(o => (filters.genres || []).includes(o)).length;
+            const catExc = cat.options.filter(o => (filters.exclude_genres || []).includes(o)).length;
+            const catActive = catInc + catExc;
 
             return (
               <button
-                key={g}
+                key={cat.id}
                 type="button"
-                onClick={() => {
-                  if (!isInc && !isExc) toggleGenre(g, 'include');
-                  else if (isInc) toggleGenre(g, 'exclude');
-                  else toggleGenre(g, 'exclude');
-                }}
-                className={`px-2 py-0.5 rounded-full text-[11px] font-serif-jp border transition-all cursor-pointer ${
-                  isInc
-                    ? 'bg-[var(--accent-vermillion)] border-[var(--accent-vermillion)] text-white font-bold'
-                    : isExc
-                    ? 'bg-black/30 border-red-500 text-red-400 line-through'
-                    : 'bg-[var(--bg-color)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-color)]'
+                onClick={() => setActiveCategoryTab(cat.id)}
+                className={`px-3 py-1 rounded-full text-[11px] font-mono whitespace-nowrap transition-all cursor-pointer flex items-center gap-1.5 ${
+                  activeCategoryTab === cat.id
+                    ? 'bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
+                    : 'bg-[var(--bg-color)] border border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-color)]'
                 }`}
               >
-                #{g}
+                <span>{cat.name}</span>
+                {catActive > 0 && (
+                  <span className="w-4 h-4 rounded-full bg-white/20 text-[9px] font-bold flex items-center justify-center">
+                    {catActive}
+                  </span>
+                )}
               </button>
             );
           })}
         </div>
+
+        {/* Categorized Pills Content */}
+        <div className="space-y-3 pt-1">
+          {displayedCategories.map(cat => {
+            const filteredOptions = cat.options.filter(opt => {
+              if (!tagQuery) return true;
+              const q = tagQuery.toLowerCase().trim();
+              const lower = opt.toLowerCase();
+              if (lower.includes(q)) return true;
+              if (lower === "boys' love" && (q === 'yaoi' || q === 'bl')) return true;
+              if (lower === "girls' love" && (q === 'yuri' || q === 'gl')) return true;
+              return false;
+            });
+            if (filteredOptions.length === 0) return null;
+
+            return (
+              <div key={cat.id} className="bg-[var(--bg-color)]/50 border border-[var(--border-color)]/60 rounded-xl p-3 space-y-2">
+                {/* Category Header Bar (Clean typography, no icons/emojis) */}
+                <div className="flex items-center justify-between pb-1 border-b border-[var(--border-color)]/40">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-serif-jp font-bold text-[var(--text-color)]">{cat.name}</span>
+                    <span className="text-[9px] font-mono text-[var(--text-muted)] px-2 py-0.5 rounded-md bg-[var(--surface-color)] border border-[var(--border-color)]/60">
+                      {cat.tagline}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Options Pills Grid */}
+                <div className="flex flex-wrap gap-1.5 pt-1">
+                  {filteredOptions.map(opt => {
+                    const isInc = (filters.genres || []).includes(opt);
+                    const isExc = (filters.exclude_genres || []).includes(opt);
+
+                    return (
+                      <button
+                        key={opt}
+                        type="button"
+                        onClick={() => {
+                          if (!isInc && !isExc) toggleGenre(opt, 'include');
+                          else if (isInc) toggleGenre(opt, 'exclude');
+                          else {
+                            // Reset back to neutral
+                            setFilters(prev => ({
+                              ...prev,
+                              genres: (prev.genres || []).filter(g => g !== opt),
+                              exclude_genres: (prev.exclude_genres || []).filter(g => g !== opt)
+                            }));
+                          }
+                        }}
+                        title={isInc ? 'Included (click to exclude)' : isExc ? 'Excluded (click to reset)' : 'Click to include'}
+                        className={`px-3 py-1 rounded-full text-xs font-serif-jp border transition-all cursor-pointer flex items-center justify-center select-none ${
+                          isInc
+                            ? 'bg-[var(--accent-vermillion)] border-[var(--accent-vermillion)] text-white font-bold shadow-xs'
+                            : isExc
+                            ? 'bg-red-950/40 border-red-500/70 text-red-300 line-through font-bold opacity-85'
+                            : 'bg-[var(--surface-color)] border-[var(--border-color)] text-[var(--text-muted)] hover:text-[var(--text-color)] hover:border-[var(--text-muted)]'
+                        }`}
+                      >
+                        <span>#{opt}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Quick Reset for category filters when active */}
+        {((filters.genres?.length || 0) > 0 || (filters.exclude_genres?.length || 0) > 0) && (
+          <div className="flex justify-end pt-1 px-1">
+            <button
+              type="button"
+              onClick={() => setFilters(prev => ({ ...prev, genres: [], exclude_genres: [] }))}
+              className="text-[10px] font-mono text-[var(--accent-vermillion)] hover:underline cursor-pointer font-bold"
+            >
+              Clear Category Filters ({((filters.genres?.length || 0) + (filters.exclude_genres?.length || 0))})
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

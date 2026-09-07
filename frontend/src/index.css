@@ -492,6 +492,27 @@ h1, h2, h3, .font-serif-jp {
   animation: shimmer-paper 1.6s infinite linear;
 }
 
+/* Surprise Me Card Bottom Details Hover / Expand Transition */
+.card-details-peek {
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  margin-top: 0;
+  pointer-events: none;
+  transition: grid-template-rows 350ms cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 300ms ease,
+              margin-top 350ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.group:hover .card-details-peek,
+.card-details-peek.is-expanded {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  margin-top: 0.625rem;
+  pointer-events: auto;
+}
+
+
 
 
 

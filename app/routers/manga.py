@@ -174,7 +174,13 @@ async def get_trending_manga(
         if country_code:
             variables["countryOfOrigin"] = country_code
         if genre_clean:
-            variables["genre"] = genre_clean
+            low_g = genre_clean.lower()
+            if low_g in ['yaoi', 'bl', "boys' love"]:
+                variables["genre"] = "Boys' Love"
+            elif low_g in ['yuri', 'gl', "girls' love"]:
+                variables["genre"] = "Girls' Love"
+            else:
+                variables["genre"] = genre_clean
 
         async with httpx.AsyncClient(timeout=8.0) as client:
             resp = await client.post("https://graphql.anilist.co", json={"query": query, "variables": variables})
@@ -222,15 +228,24 @@ async def get_trending_manga(
             (Manga.start_year >= 2020) | (Manga.status == "RELEASING")
         ]
 
-        if fmt == "manhwa":
-            where_clauses.append(sa_text("(tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Manhwa%' OR tags::text ILIKE '%Korean%' OR genres @> ARRAY['Manhwa'] OR site_url ILIKE '%manhwa%')"))
-        elif fmt == "manhua":
-            where_clauses.append(sa_text("(tags::text ILIKE '%Manhua%' OR tags::text ILIKE '%Chinese%' OR tags::text ILIKE '%Ancient China%' OR genres @> ARRAY['Manhua'] OR site_url ILIKE '%manhua%')"))
-        elif fmt == "manga":
-            where_clauses.append(sa_text("NOT (tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Manhwa%' OR tags::text ILIKE '%Manhua%' OR tags::text ILIKE '%Chinese%' OR site_url ILIKE '%manhwa%' OR site_url ILIKE '%manhua%')"))
+        if fmt:
+            from ..services.retrieval import build_format_sql_condition
+            fmt_cond = build_format_sql_condition([fmt])
+            if fmt_cond:
+                where_clauses.append(sa_text(fmt_cond))
 
         if genre_clean:
-            where_clauses.append(sa_text(f"genres @> ARRAY['{genre_clean}']"))
+            low = genre_clean.lower()
+            if low in ['yaoi', 'bl', "boys' love"]:
+                where_clauses.append(sa_text("(genres @> ARRAY['Boys'' Love'] OR tags::text ILIKE '%Boys'' Love%' OR tags::text ILIKE '%Yaoi%')"))
+            elif low in ['yuri', 'gl', "girls' love"]:
+                where_clauses.append(sa_text("(genres @> ARRAY['Girls'' Love'] OR tags::text ILIKE '%Girls'' Love%' OR tags::text ILIKE '%Yuri%')"))
+            elif low in ['shoujo ai']:
+                where_clauses.append(sa_text("(tags::text ILIKE '%Shoujo Ai%' OR tags::text ILIKE '%Girls'' Love%' OR tags::text ILIKE '%Yuri%')"))
+            elif low in ['shounen ai']:
+                where_clauses.append(sa_text("(tags::text ILIKE '%Shounen Ai%' OR tags::text ILIKE '%Boys'' Love%' OR tags::text ILIKE '%Yaoi%')"))
+            else:
+                where_clauses.append(sa_text(f"(genres @> ARRAY['{genre_clean}'] OR tags::text ILIKE '%{genre_clean}%')"))
 
         offset = (page - 1) * limit
         stmt = (
