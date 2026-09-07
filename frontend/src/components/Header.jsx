@@ -3,12 +3,21 @@ import { useState, useEffect } from 'react';
 export default function Header({ 
   activeTab, 
   setActiveTab, 
+  onSelectTab,
   bookmarkCount, 
   onOpenSettings,
   theme = 'sumi'
 }) {
   const [isVisible, setIsVisible] = useState(true);
   const [lastScrollY, setLastScrollY] = useState(0);
+
+  const handleTab = (tab) => {
+    if (onSelectTab) {
+      onSelectTab(tab);
+    } else if (setActiveTab) {
+      setActiveTab(tab);
+    }
+  };
 
   useEffect(() => {
     const handleScroll = () => {
@@ -34,7 +43,7 @@ export default function Header({
         
         {/* Logo */}
         <div 
-          onClick={() => setActiveTab('explore')}
+          onClick={() => handleTab('explore')}
           className="flex items-center gap-3 cursor-pointer group"
         >
           <div className="w-8 h-8 rounded-lg bg-[var(--surface-color)] border border-[var(--border-color)] flex items-center justify-center text-[var(--accent-vermillion)] font-bold text-sm shadow-sm group-hover:border-[var(--accent-vermillion)] transition-colors">
@@ -53,7 +62,7 @@ export default function Header({
         {/* Navigation Tabs (Centered) */}
         <nav className="absolute left-1/2 -translate-x-1/2 flex items-center bg-[var(--surface-color)] border border-[var(--border-color)] rounded-full p-1 transition-colors shadow-sm">
           <button
-            onClick={() => setActiveTab('explore')}
+            onClick={() => handleTab('explore')}
             className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
               activeTab === 'explore'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
@@ -67,7 +76,7 @@ export default function Header({
           </button>
 
           <button
-            onClick={() => setActiveTab('trending')}
+            onClick={() => handleTab('trending')}
             className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
               activeTab === 'trending'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
@@ -82,7 +91,7 @@ export default function Header({
           </button>
 
           <button
-            onClick={() => setActiveTab('surprise')}
+            onClick={() => handleTab('surprise')}
             className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
               activeTab === 'surprise'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
@@ -96,7 +105,7 @@ export default function Header({
           </button>
 
           <button
-            onClick={() => setActiveTab('bookmarks')}
+            onClick={() => handleTab('bookmarks')}
             className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer relative ${
               activeTab === 'bookmarks'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'

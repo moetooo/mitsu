@@ -1,4 +1,39 @@
 import { useState, useEffect } from 'react';
+import { isCoverCached, markCoverCached } from '../utils/imageUtils';
+
+function HeroCoverThumbnail({ url, title }) {
+  const isCached = isCoverCached(url);
+  const [loaded, setLoaded] = useState(isCached);
+
+  useEffect(() => {
+    if (isCoverCached(url)) {
+      setLoaded(true);
+    } else {
+      setLoaded(false);
+    }
+  }, [url]);
+
+  return (
+    <div className="w-32 h-52 sm:w-38 sm:h-56 md:w-44 md:h-64 rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl shrink-0 bg-black/40 relative group-hover:scale-[1.02] transition-transform">
+      {!loaded && url && (
+        <div className="absolute inset-0 shimmer-paper-loading z-10 flex flex-col items-center justify-center p-4">
+          <span className="text-base font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
+        </div>
+      )}
+      <img
+        src={url}
+        alt={title}
+        referrerPolicy="no-referrer"
+        decoding="async"
+        onLoad={() => {
+          markCoverCached(url);
+          setLoaded(true);
+        }}
+        className={`w-full h-full object-cover transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+      />
+    </div>
+  );
+}
 
 const FALLBACK_BANNERS = [
   {
@@ -169,14 +204,7 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
       <div className="absolute inset-0 z-20 p-4 sm:p-5 md:p-6 flex items-center gap-5 sm:gap-6 text-white drop-shadow-lg max-w-5xl pointer-events-none">
         {/* Exact Cover Thumbnail */}
         {current.cover_image_url && (
-          <div className="w-32 h-52 sm:w-38 sm:h-56 md:w-44 md:h-64 rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl shrink-0 bg-black/40 relative group-hover:scale-[1.02] transition-transform">
-            <img
-              src={current.cover_image_url}
-              alt={current.title}
-              referrerPolicy="no-referrer"
-              className="w-full h-full object-cover"
-            />
-          </div>
+          <HeroCoverThumbnail url={current.cover_image_url} title={current.title} />
         )}
 
         {/* Text Content */}

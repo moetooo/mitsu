@@ -46,3 +46,8 @@ scratch/
 preflight.py
 add_column.py
 precompute_similarities.py
+tests/
+pytest.ini
+temp_*.py
+check_*.py
+

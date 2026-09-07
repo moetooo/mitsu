@@ -221,6 +221,50 @@ export default function SettingsModal({ settings, setSettings, isOpen, onClose }
             </div>
           </div>
 
+          {/* User Request: Surprise Me Discovery Card Cover Length Setting */}
+          <div className="space-y-3 border border-[var(--border-color)] rounded-2xl p-4 bg-[var(--bg-color)]/50">
+            <div className="flex items-center justify-between">
+              <label className="text-xs font-mono font-bold text-[var(--accent-vermillion)] uppercase tracking-wider">
+                Surprise Me Cover Length
+              </label>
+              <span className="text-xs font-mono text-[var(--accent-vermillion)] font-bold px-2 py-0.5 rounded-md bg-[var(--surface-color)] border border-[var(--border-color)]">
+                {settings.surpriseImageLength || 60}%
+              </span>
+            </div>
+            <p className="text-[10px] text-[var(--text-muted)] font-mono">
+              Adjust manga cover length proportion inside the Surprise Me card (50% to 70%, 60% default).
+            </p>
+            <div className="flex items-center gap-3">
+              <span className="text-[10px] font-mono text-[var(--text-muted)]">50%</span>
+              <input 
+                type="range" 
+                min="50" 
+                max="70" 
+                value={settings.surpriseImageLength || 60}
+                step="1"
+                onChange={(e) => setSettings(prev => ({ ...prev, surpriseImageLength: parseInt(e.target.value, 10) }))}
+                className="w-full h-1.5 bg-[var(--surface-color)] rounded-lg appearance-none cursor-pointer accent-[var(--accent-vermillion)]"
+              />
+              <span className="text-[10px] font-mono text-[var(--text-muted)]">70% (Max)</span>
+            </div>
+            <div className="grid grid-cols-4 gap-2 pt-1">
+              {[55, 60, 65, 70].map(val => (
+                <button
+                  key={val}
+                  type="button"
+                  onClick={() => setSettings(prev => ({ ...prev, surpriseImageLength: val }))}
+                  className={`py-1.5 rounded-xl border text-xs font-mono transition-all cursor-pointer ${
+                    (settings.surpriseImageLength || 60) === val
+                      ? 'border-[var(--accent-vermillion)] bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
+                      : 'border-[var(--border-color)] bg-[var(--surface-color)] text-[var(--text-muted)] hover:text-[var(--text-color)]'
+                  }`}
+                >
+                  {val}% {val === 60 ? '★' : ''}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* User Request: Load More Batch Size Setting & Feature 149 Infinite Scroll */}
           <div className="space-y-4 border border-[var(--border-color)] rounded-2xl p-4 bg-[var(--bg-color)]/50">
             <div>

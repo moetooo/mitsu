@@ -2,6 +2,8 @@ import random
 import hashlib
 import json
 import asyncio
+import time
+import re
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Dict, Any, Set
@@ -12,13 +14,153 @@ from ..services import cache
 ROULETTE_POOL_TARGET = 50
 ROULETTE_REFILL_THRESHOLD = 15
 
+HANGUL_RE = re.compile(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]')
+KANA_RE = re.compile(r'[\u3040-\u309f\u30a0-\u30ff]')
+HANZI_RE = re.compile(r'[\u4e00-\u9fff]')
+
 def generate_filter_hash(filters: Optional[RecommendFilters]) -> str:
     """Generates a stable MD5 fingerprint hash for a filter set"""
     if not filters:
         return "default"
-    filter_dict = filters.dict(exclude_none=True)
+    filter_dict = filters.model_dump(exclude_none=True) if hasattr(filters, 'model_dump') else filters.dict(exclude_none=True)
     filter_str = json.dumps(filter_dict, sort_keys=True)
     return hashlib.md5(filter_str.encode()).hexdigest()[:12]
+
+def build_genre_sql_condition(genres_list: List[str], exclude: bool = False) -> Optional[str]:
+    """Builds an exhaustive SQL condition across PostgreSQL text array genres and JSONB tags"""
+    if not genres_list:
+        return None
+    conditions = []
+    for g in genres_list:
+        escaped = g.replace("'", "''")
+        low = g.lower()
+        if low in ['yaoi', 'bl', "boys' love"]:
+            conditions.append("(genres @> ARRAY['Boys'' Love'] OR tags::text ILIKE '%Boys'' Love%' OR tags::text ILIKE '%Yaoi%')")
+        elif low in ['yuri', 'gl', "girls' love"]:
+            conditions.append("(genres @> ARRAY['Girls'' Love'] OR tags::text ILIKE '%Girls'' Love%' OR tags::text ILIKE '%Yuri%')")
+        elif low in ['shoujo ai', 'shoujo-ai']:
+            conditions.append("(tags::text ILIKE '%Shoujo Ai%' OR tags::text ILIKE '%Girls'' Love%' OR tags::text ILIKE '%Yuri%')")
+        elif low in ['shounen ai', 'shounen-ai']:
+            conditions.append("(tags::text ILIKE '%Shounen Ai%' OR tags::text ILIKE '%Boys'' Love%' OR tags::text ILIKE '%Yaoi%')")
+        elif low in ['shounen', 'shoujo', 'seinen', 'josei']:
+            conditions.append(f"tags::text ILIKE '%\"name\": \"{escaped}\"%'")
+        elif low in ['harem', 'reverse harem', 'love triangle']:
+            conditions.append(f"tags::text ILIKE '%{escaped}%'")
+        else:
+            conditions.append(f"(genres @> ARRAY['{escaped}'] OR tags::text ILIKE '%{escaped}%')")
+
+    if not conditions:
+        return None
+    combined = " OR ".join(conditions)
+    if exclude:
+        return f"NOT ({combined})"
+    return f"({combined})"
+
+def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
+    """Builds an accurate SQL condition distinguishing Japanese Manga from Korean Manhwa and Chinese Manhua."""
+    if not raw_fmts:
+        return None
+    fmt_conditions = []
+    for f in raw_fmts:
+        ft = f.lower().strip()
+        if ft == 'manhwa':
+            fmt_conditions.append(
+                "("
+                "("
+                "title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]' "
+                "OR tags::text ILIKE '%Manhwa%' "
+                "OR tags::text ILIKE '%Webtoon%' "
+                "OR tags::text ILIKE '%Korean%' "
+                "OR genres @> ARRAY['Manhwa'] "
+                "OR site_url ILIKE '%manhwa%'"
+                ") "
+                "AND NOT ("
+                "tags::text ILIKE '%Manhua%' "
+                "OR tags::text ILIKE '%Chinese%' "
+                "OR tags::text ILIKE '%Ancient China%' "
+                "OR genres @> ARRAY['Manhua'] "
+                "OR site_url ILIKE '%manhua%'"
+                ")"
+                ")"
+            )
+        elif ft == 'manhua':
+            fmt_conditions.append(
+                "("
+                "("
+                "tags::text ILIKE '%Manhua%' "
+                "OR tags::text ILIKE '%Chinese%' "
+                "OR tags::text ILIKE '%Ancient China%' "
+                "OR genres @> ARRAY['Manhua'] "
+                "OR site_url ILIKE '%manhua%' "
+                "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]' OR title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]') AND (tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Full Color%'))"
+                ") "
+                "AND NOT ("
+                "title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]' "
+                "OR tags::text ILIKE '%Manhwa%' "
+                "OR tags::text ILIKE '%Korean%' "
+                "OR genres @> ARRAY['Manhwa'] "
+                "OR site_url ILIKE '%manhwa%'"
+                ")"
+                ")"
+            )
+        elif ft == 'manga':
+            fmt_conditions.append(
+                "NOT ("
+                "title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]' "
+                "OR tags::text ILIKE '%Manhwa%' "
+                "OR tags::text ILIKE '%Webtoon%' "
+                "OR tags::text ILIKE '%Korean%' "
+                "OR genres @> ARRAY['Manhwa'] "
+                "OR site_url ILIKE '%manhwa%' "
+                "OR tags::text ILIKE '%Manhua%' "
+                "OR tags::text ILIKE '%Chinese%' "
+                "OR tags::text ILIKE '%Ancient China%' "
+                "OR genres @> ARRAY['Manhua'] "
+                "OR site_url ILIKE '%manhua%' "
+                "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]') AND (tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Full Color%'))"
+                ")"
+            )
+    if not fmt_conditions:
+        return None
+    return f"({' OR '.join(fmt_conditions)})"
+
+def infer_format_type(
+    title_native: Optional[str] = None,
+    tags: Any = None,
+    genres: Optional[List[str]] = None,
+    site_url: Optional[str] = None
+) -> str:
+    """Infers whether a title is MANHWA, MANHUA, or MANGA from metadata."""
+    tags_str = str(tags) if tags else ""
+    genres_list = genres or []
+    site_str = (site_url or "").lower()
+    has_kana = bool(title_native and KANA_RE.search(title_native))
+    has_hangul = bool(title_native and HANGUL_RE.search(title_native))
+    has_hanzi = bool(title_native and HANZI_RE.search(title_native))
+
+    # Korean Manhwa check (Explicit Korean markers)
+    if (
+        has_hangul or
+        "Manhwa" in genres_list or
+        "Manhwa" in tags_str or
+        "Webtoon" in tags_str or
+        "Korean" in tags_str or
+        "manhwa" in site_str
+    ):
+        return "MANHWA"
+
+    # Chinese Manhua check (Explicit Chinese markers or Hanzi-only webtoons)
+    if (
+        "Manhua" in genres_list or
+        "Manhua" in tags_str or
+        "Chinese" in tags_str or
+        "Ancient China" in tags_str or
+        "manhua" in site_str or
+        (has_hanzi and not has_kana and not has_hangul and ("Long Strip" in tags_str or "Full Color" in tags_str))
+    ):
+        return "MANHUA"
+
+    return "MANGA"
 
 async def retrieve_similar_manga(
     session: AsyncSession,
@@ -52,24 +194,18 @@ async def retrieve_similar_manga(
         if filters.max_chapters:
             where_clauses.append(f"chapters <= {int(filters.max_chapters)}")
         if filters.genres:
-            genres_arr = "ARRAY[" + ",".join(f"'{g.replace('\'', '\'\'')}'" for g in filters.genres) + "]"
-            where_clauses.append(f"genres && {genres_arr}")
+            cond = build_genre_sql_condition(filters.genres, exclude=False)
+            if cond:
+                where_clauses.append(cond)
         if filters.exclude_genres:
-            ex_genres_arr = "ARRAY[" + ",".join(f"'{g.replace('\'', '\'\'')}'" for g in filters.exclude_genres) + "]"
-            where_clauses.append(f"NOT (genres && {ex_genres_arr})")
+            cond = build_genre_sql_condition(filters.exclude_genres, exclude=True)
+            if cond:
+                where_clauses.append(cond)
         if filters.format_type:
             raw_fmts = filters.format_type if isinstance(filters.format_type, list) else [filters.format_type]
-            fmt_conditions = []
-            for f in raw_fmts:
-                ft = f.lower()
-                if ft == 'manhwa':
-                    fmt_conditions.append("(tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Manhwa%' OR tags::text ILIKE '%Korean%' OR genres @> ARRAY['Manhwa'] OR site_url ILIKE '%manhwa%')")
-                elif ft == 'manhua':
-                    fmt_conditions.append("(tags::text ILIKE '%Manhua%' OR tags::text ILIKE '%Chinese%' OR tags::text ILIKE '%Ancient China%' OR genres @> ARRAY['Manhua'] OR site_url ILIKE '%manhua%')")
-                elif ft == 'manga':
-                    fmt_conditions.append("NOT (tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Manhwa%' OR tags::text ILIKE '%Manhua%' OR tags::text ILIKE '%Chinese%' OR site_url ILIKE '%manhwa%' OR site_url ILIKE '%manhua%')")
-            if fmt_conditions:
-                where_clauses.append(f"({' OR '.join(fmt_conditions)})")
+            fmt_cond = build_format_sql_condition(raw_fmts)
+            if fmt_cond:
+                where_clauses.append(fmt_cond)
 
     where_str = " AND ".join(where_clauses)
 
@@ -150,10 +286,12 @@ async def retrieve_similar_manga(
         m.cover_image_url = r.cover_image_url
         m.banner_image = r.banner_image
         m.site_url = r.site_url
+        m.format_type = infer_format_type(r.title_native, r.tags, r.genres, r.site_url)
 
         candidates.append({
             "manga": m,
-            "similarity_score": float(r.hybrid_score)
+            "similarity_score": float(r.hybrid_score),
+            "format_type": m.format_type
         })
 
     return candidates
@@ -236,6 +374,7 @@ def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target
     for r in diverse_selection:
         title = r.title_english or r.title_romaji or r.title_native or "Unknown Title"
         sim_score = round((r.average_score or 85) / 100.0, 2)
+        fmt = infer_format_type(r.title_native, r.tags, r.genres, r.site_url)
         out.append({
             "id": r.id,
             "anilist_id": r.anilist_id,
@@ -252,7 +391,8 @@ def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target
             "volumes": r.volumes,
             "average_score": r.average_score,
             "similarity_score": sim_score,
-            "llm_reasoning": "Discovery Roulette candidate."
+            "llm_reasoning": "Discovery Roulette candidate.",
+            "format_type": fmt
         })
 
     return out
@@ -285,29 +425,24 @@ async def sample_candidates_from_db(
         if filters.max_chapters:
             where_clauses.append(f"chapters <= {int(filters.max_chapters)}")
         if filters.genres:
-            genres_arr = "ARRAY[" + ",".join(f"'{g.replace('\'', '\'\'')}'" for g in filters.genres) + "]"
-            where_clauses.append(f"genres && {genres_arr}")
+            cond = build_genre_sql_condition(filters.genres, exclude=False)
+            if cond:
+                where_clauses.append(cond)
         if filters.exclude_genres:
-            ex_genres_arr = "ARRAY[" + ",".join(f"'{g.replace('\'', '\'\'')}'" for g in filters.exclude_genres) + "]"
-            where_clauses.append(f"NOT (genres && {ex_genres_arr})")
+            cond = build_genre_sql_condition(filters.exclude_genres, exclude=True)
+            if cond:
+                where_clauses.append(cond)
         if filters.format_type:
             raw_fmts = filters.format_type if isinstance(filters.format_type, list) else [filters.format_type]
-            fmt_conditions = []
-            for f in raw_fmts:
-                ft = f.lower()
-                if ft == 'manhwa':
-                    fmt_conditions.append("(tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Manhwa%' OR tags::text ILIKE '%Korean%' OR genres @> ARRAY['Manhwa'] OR site_url ILIKE '%manhwa%')")
-                elif ft == 'manhua':
-                    fmt_conditions.append("(tags::text ILIKE '%Manhua%' OR tags::text ILIKE '%Chinese%' OR tags::text ILIKE '%Ancient China%' OR genres @> ARRAY['Manhua'] OR site_url ILIKE '%manhua%')")
-                elif ft == 'manga':
-                    fmt_conditions.append("NOT (tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Manhwa%' OR tags::text ILIKE '%Manhua%' OR tags::text ILIKE '%Chinese%' OR site_url ILIKE '%manhwa%' OR site_url ILIKE '%manhua%')")
-            if fmt_conditions:
-                where_clauses.append(f"({' OR '.join(fmt_conditions)})")
+            fmt_cond = build_format_sql_condition(raw_fmts)
+            if fmt_cond:
+                where_clauses.append(fmt_cond)
 
     where_str = " AND ".join(where_clauses)
     rand_offset = random.randint(0, 40)
+    rand_seed = f"seed_{random.randint(1, 999999999)}_{time.time()}"
 
-    # NO ORDER BY RANDOM()! Uses fast pseudo-random knuth hash modulo order & offset
+    # Safe, uniform pseudo-random distribution via core PostgreSQL hashtext (0 overflow risk)
     sql = text(f"""
         SELECT 
           id, anilist_id, mal_id, mangadex_id, title_romaji, title_english, title_native,
@@ -315,15 +450,19 @@ async def sample_candidates_from_db(
           average_score, popularity, cover_image_url, banner_image, site_url
         FROM manga
         WHERE {where_str}
-        ORDER BY MOD(id * 2654435761, 4294967296) DESC
+        ORDER BY hashtext(id::text || :seed) DESC
         LIMIT :limit OFFSET :offset;
     """)
 
-    result = await session.execute(sql, {"limit": sample_limit, "offset": rand_offset})
+    result = await session.execute(sql, {
+        "limit": sample_limit, 
+        "offset": rand_offset,
+        "seed": rand_seed
+    })
     return result.all()
 
 
-async def refill_roulette_pool(session: AsyncSession, filters: Optional[RecommendFilters], session_id: Optional[str] = None):
+async def refill_roulette_pool(filters: Optional[RecommendFilters], session_id: Optional[str] = None):
     """Background pool refiller: fetches DB candidates, applies diversity, and pushes to Redis"""
     filter_hash = generate_filter_hash(filters)
 
@@ -337,11 +476,16 @@ async def refill_roulette_pool(session: AsyncSession, filters: Optional[Recommen
         if session_id:
             seen_set = await cache.get_session_seen(session_id)
 
-        db_rows = await sample_candidates_from_db(session, filters=filters, sample_limit=150)
-        diverse_items = apply_diversity_filtering(db_rows, exclude_ids=seen_set, max_target=ROULETTE_POOL_TARGET)
+        from ..db import AsyncSessionLocal
+        async with AsyncSessionLocal() as bg_session:
+            db_rows = await sample_candidates_from_db(bg_session, filters=filters, sample_limit=150)
+            diverse_items = apply_diversity_filtering(db_rows, exclude_ids=seen_set, max_target=ROULETTE_POOL_TARGET)
 
-        if diverse_items:
-            await cache.push_roulette_pool(filter_hash, diverse_items, ttl=3600)
+            if diverse_items:
+                random.shuffle(diverse_items)
+                await cache.push_roulette_pool(filter_hash, diverse_items, ttl=1800)
+    except Exception as e:
+        pass
     finally:
         await cache.release_refill_lock(filter_hash)
 
@@ -363,26 +507,29 @@ async def retrieve_roulette_manga(
     # 2. Check current Redis candidate pool size
     pool_size = await cache.get_roulette_pool_size(filter_hash)
 
-    # 3. Asynchronously trigger background pool refill if below threshold
-    if pool_size < ROULETTE_REFILL_THRESHOLD:
-        asyncio.create_task(refill_roulette_pool(session, filters, session_id))
+    # 3. Asynchronously trigger background pool refill if below threshold and active session
+    if pool_size < ROULETTE_REFILL_THRESHOLD and session_id:
+        asyncio.create_task(refill_roulette_pool(filters, session_id))
 
     # 4. Attempt popping from Redis candidate pool
     results = []
     if pool_size > 0:
-        popped_items = await cache.pop_roulette_pool(filter_hash, count=pool_limit)
+        popped_items = await cache.pop_roulette_pool(filter_hash, count=max(pool_limit, 4))
         # Exclude seen items
-        for item in popped_items:
-            if item["id"] not in combined_seen:
-                results.append(item)
+        unseen_items = [item for item in popped_items if item["id"] not in combined_seen]
+        if unseen_items:
+            random.shuffle(unseen_items)
+            results = unseen_items[:pool_limit]
 
-    # 5. Fallback: If Redis empty or popped items were seen, query DB cleanly without ORDER BY RANDOM()
+    # 5. Fallback: If Redis empty or popped items were seen, query DB cleanly with dynamic seeds
     if not results:
-        db_rows = await sample_candidates_from_db(session, filters=filters, sample_limit=60)
+        db_rows = await sample_candidates_from_db(session, filters=filters, sample_limit=80)
         results = apply_diversity_filtering(db_rows, exclude_ids=combined_seen, max_target=pool_limit)
         if not results and db_rows:
             # Absolute fallback if all candidates were seen
             results = apply_diversity_filtering(db_rows, exclude_ids=set(), max_target=pool_limit)
+        if results:
+            random.shuffle(results)
 
     # 6. Update server-authoritative seen set in Redis
     if results and session_id:

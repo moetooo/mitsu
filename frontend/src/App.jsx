@@ -1,4 +1,4 @@
-import { useState, useEffect, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
 import ComparisonSearch from './components/ComparisonSearch';
@@ -38,11 +38,35 @@ const INITIAL_SETTINGS = {
   hoverAccent: 'vermillion', // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
   allowNsfw: false, // Global 18+ Content Permission in Settings
   nsfwBlur: true, // Mature/NSFW cover blur safety toggle
-  infiniteScroll: true // Feature 149: Infinite scroll with IntersectionObserver sentinel
+  infiniteScroll: true, // Feature 149: Infinite scroll with IntersectionObserver sentinel
+  surpriseImageLength: 60 // Surprise Me Discovery card image length % (50% - 70%, default 60%)
+};
+
+const VALID_TABS = ['explore', 'trending', 'surprise', 'bookmarks'];
+
+const getTabFromPath = (path) => {
+  const clean = (path || '').replace(/^\/+|\/+$/g, '').split('/')[0].toLowerCase();
+  return VALID_TABS.includes(clean) ? clean : 'explore';
+};
+
+const getInitialTab = () => {
+  if (typeof window !== 'undefined') {
+    // Graceful backward-compatibility cleanup if arriving via legacy '#tab'
+    if (window.location.hash) {
+      const hash = window.location.hash.replace('#', '').toLowerCase();
+      if (VALID_TABS.includes(hash)) {
+        const cleanPath = hash === 'explore' ? '/' : `/${hash}`;
+        window.history.replaceState({ tab: hash }, '', cleanPath);
+        return hash;
+      }
+    }
+    return getTabFromPath(window.location.pathname);
+  }
+  return 'explore';
 };
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState('explore'); // 'explore' | 'trending' | 'surprise' | 'bookmarks'
+  const [activeTab, setActiveTab] = useState(getInitialTab);
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [mangas, setMangas] = useState([]);
@@ -55,11 +79,16 @@ export default function App() {
   // Surprise Me Discovery States
   const [surpriseManga, setSurpriseManga] = useState(null);
   const [loadingSurprise, setLoadingSurprise] = useState(false);
+  const [surpriseKey, setSurpriseKey] = useState(0);
   const [seenRouletteIds, setSeenRouletteIds] = useState([]);
 
   const [settings, setSettings] = useState(() => {
-    const saved = localStorage.getItem('mitsu_settings') || localStorage.getItem('mangamind_settings');
-    return saved ? JSON.parse(saved) : INITIAL_SETTINGS;
+    try {
+      const saved = localStorage.getItem('mitsu_settings') || localStorage.getItem('mangamind_settings');
+      return saved ? { ...INITIAL_SETTINGS, ...JSON.parse(saved) } : INITIAL_SETTINGS;
+    } catch {
+      return INITIAL_SETTINGS;
+    }
   });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -69,8 +98,13 @@ export default function App() {
 
   // LocalStorage Bookmarks state
   const [bookmarks, setBookmarks] = useState(() => {
-    const saved = localStorage.getItem('mitsu_bookmarks') || localStorage.getItem('mangamind_bookmarks');
-    return saved ? JSON.parse(saved) : [];
+    try {
+      const saved = localStorage.getItem('mitsu_bookmarks') || localStorage.getItem('mangamind_bookmarks');
+      const parsed = saved ? JSON.parse(saved) : [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
   });
 
   // Trending Section Divided State & Filters
@@ -82,29 +116,53 @@ export default function App() {
   const [loadingTrending, setLoadingTrending] = useState(false);
   const [hasMoreTrending, setHasMoreTrending] = useState(true);
 
-  const [sessionId] = useState(() => {
+  const [sessionId, setSessionId] = useState(() => {
     return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'session_' + Math.random().toString(36).substring(2, 9);
   });
+  const sessionIdRef = useRef(sessionId);
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+  }, [sessionId]);
 
-  const handleSurpriseMe = async () => {
+  const handleSurpriseMe = async (forceFresh = false) => {
     setLoadingSurprise(true);
+    if (forceFresh) {
+      setSurpriseManga(null);
+      setSeenRouletteIds([]);
+      setSurpriseKey(k => k + 1);
+    }
+    const currSeen = forceFresh ? [] : seenRouletteIds;
+    const currentSession = forceFresh 
+      ? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'session_' + Math.random().toString(36).substring(2, 9))
+      : sessionIdRef.current;
+
+    if (forceFresh) {
+      setSessionId(currentSession);
+      sessionIdRef.current = currentSession;
+    }
+
+    // Small anticipation delay (~550ms) so "Discovering Titles..." is visibly displayed
+    const minDelayPromise = new Promise(resolve => setTimeout(resolve, 550));
 
     try {
-      const res = await fetch('http://localhost:8000/roulette', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query: query || null,
-          filters: { ...filters, nsfw: settings.allowNsfw },
-          seen_ids: seenRouletteIds,
-          session_id: sessionId,
-          limit: 40
-        })
-      });
+      const [res] = await Promise.all([
+        fetch('http://localhost:8000/roulette', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            query: query || null,
+            filters: { ...filters, nsfw: settings.allowNsfw },
+            seen_ids: currSeen,
+            session_id: currentSession,
+            limit: 40
+          })
+        }),
+        minDelayPromise
+      ]);
       if (res.ok) {
         const data = await res.json();
         setSurpriseManga(data);
-        setSeenRouletteIds(prev => [...prev, data.id]);
+        setSeenRouletteIds(prev => [...(forceFresh ? [] : prev), data.id]);
         return data;
       }
     } catch (err) {
@@ -123,7 +181,7 @@ export default function App() {
         body: JSON.stringify({
           filters: { ...filters, nsfw: settings.allowNsfw },
           seen_ids: seenRouletteIds,
-          session_id: sessionId,
+          session_id: sessionIdRef.current,
           count: count
         })
       });
@@ -139,6 +197,46 @@ export default function App() {
       console.error('Failed to fetch roulette batch:', err);
     }
     return [];
+  };
+
+  // Listen for browser Back/Forward navigation (popstate)
+  useEffect(() => {
+    const handlePopState = () => {
+      const tab = getTabFromPath(window.location.pathname);
+      setActiveTab(tab);
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Keep active tab synced to clean URL path without '#'
+  useEffect(() => {
+    const targetPath = activeTab === 'explore' ? '/' : `/${activeTab}`;
+    if (window.location.pathname !== targetPath || window.location.hash) {
+      window.history.replaceState({ tab: activeTab }, '', targetPath);
+    }
+  }, [activeTab]);
+
+  // Combined tab navigation and re-click to re-roll
+  const handleTabClick = (tabId) => {
+    if (tabId === activeTab) {
+      // User is already on this section and re-clicked the active tab
+      if (tabId === 'surprise') {
+        // Aesthetic re-roll / fresh start
+        handleSurpriseMe(true);
+      } else if (tabId === 'trending') {
+        fetchTrendingData(1, false);
+      } else if (tabId === 'explore' || tabId === 'bookmarks') {
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+    } else {
+      setActiveTab(tabId);
+      const targetPath = tabId === 'explore' ? '/' : `/${tabId}`;
+      window.history.pushState({ tab: tabId }, '', targetPath);
+      if (tabId === 'surprise') {
+        handleSurpriseMe(true);
+      }
+    }
   };
 
   useEffect(() => {
@@ -190,15 +288,14 @@ export default function App() {
   };
 
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', settings.theme || 'sumi');
-    document.documentElement.setAttribute('data-title-font', settings.fontStyle || 'serif');
-    document.documentElement.setAttribute('data-accent', settings.accent || settings.hoverAccent || 'vermillion');
-    localStorage.setItem('mitsu_settings', JSON.stringify(settings));
+    document.documentElement.setAttribute('data-theme', settings?.theme || 'sumi');
+    document.documentElement.setAttribute('data-title-font', settings?.fontStyle || 'serif');
+    document.documentElement.setAttribute('data-accent', settings?.accent || settings?.hoverAccent || 'vermillion');
+    if (settings) localStorage.setItem('mitsu_settings', JSON.stringify(settings));
   }, [settings]);
 
-
   useEffect(() => {
-    localStorage.setItem('mitsu_bookmarks', JSON.stringify(bookmarks));
+    if (Array.isArray(bookmarks)) localStorage.setItem('mitsu_bookmarks', JSON.stringify(bookmarks));
   }, [bookmarks]);
 
   const hasActiveFilters =
@@ -278,14 +375,8 @@ export default function App() {
     }
   };
 
-  // Feature 76: 300ms Debounced Auto-Search on Query Input
-  useEffect(() => {
-    if (!query || query.trim().length < 3) return;
-    const timer = setTimeout(() => {
-      handleSearch(null, query, 1, filters);
-    }, 300);
-    return () => clearTimeout(timer);
-  }, [query]);
+  // Option B: Search triggers strictly on explicit Enter keypress or Search button submission.
+  // Debounced auto-search on typing has been removed.
 
   const handleLoadMore = () => {
     const nextPage = page + 1;
@@ -298,22 +389,28 @@ export default function App() {
     setQuery(tagQuery);
     setSelectedManga(null);
     setActiveTab('explore');
+    window.history.pushState({ tab: 'explore' }, '', '/');
     handleSearch(null, tagQuery, 1, filters);
   };
 
   return (
-    <div className="min-h-screen bg-[var(--bg-color)] text-[var(--text-color)] washi-paper-overlay font-sans-jp transition-colors duration-200">
+    <div className={`min-h-screen bg-[var(--bg-color)] text-[var(--text-color)] washi-paper-overlay font-sans-jp transition-colors duration-200 ${
+      activeTab === 'surprise' ? 'h-screen max-h-screen overflow-hidden' : ''
+    }`}>
       
       {/* Dynamic Main Site Header */}
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        bookmarkCount={bookmarks.length}
+        onSelectTab={handleTabClick}
+        bookmarkCount={Array.isArray(bookmarks) ? bookmarks.length : 0}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        theme={settings.theme}
+        theme={settings?.theme || 'sumi'}
       />
 
-      <div className="max-w-7xl mx-auto px-4 md:px-8 py-6 space-y-8">
+      <div className={`max-w-7xl mx-auto px-4 md:px-8 ${
+        activeTab === 'surprise' ? 'py-0 h-[calc(100vh-76px)] overflow-hidden flex flex-col items-center justify-center' : 'py-6 space-y-8'
+      }`}>
 
         {/* EXPLORE TAB VIEW */}
         {activeTab === 'explore' && (
@@ -364,7 +461,7 @@ export default function App() {
                 nsfwBlur={settings.nsfwBlur !== false}
                 hasMore={hasMore}
                 onLoadMore={handleLoadMore}
-                infiniteScroll={settings.infiniteScroll !== false}
+                infiniteScroll={false}
               />
             </main>
           </>
@@ -428,8 +525,10 @@ export default function App() {
                   Genre:
                 </span>
                 {[
-                  "all", "Action", "Adventure", "Comedy", "Drama", "Fantasy", 
-                  "Horror", "Romance", "Sci-Fi", "Slice of Life", "Supernatural", "Isekai"
+                  "all", "Romance", "Boys' Love", "Yaoi", "Girls' Love", "Yuri", 
+                  "Action", "Adventure", "Comedy", "Drama", "Fantasy", 
+                  "Horror", "Mystery", "Psychological", "Sci-Fi", "Slice of Life", 
+                  "Supernatural", "Thriller", "Isekai", "Sports", "Ecchi"
                 ].map(g => (
                   <button
                     key={g}
@@ -470,16 +569,44 @@ export default function App() {
 
         {/* SURPRISE ME TAB VIEW */}
         {activeTab === 'surprise' && (
-          <SurpriseView
-            manga={surpriseManga}
-            loading={loadingSurprise}
-            onRefresh={handleSurpriseMe}
-            fetchBatch={fetchRouletteBatch}
-            filters={filters}
-            bookmarks={bookmarks}
-            onToggleBookmark={handleToggleBookmark}
-            onSelectManga={setSelectedManga}
-          />
+          <>
+            <SurpriseView
+              key={surpriseKey}
+              manga={surpriseManga}
+              loading={loadingSurprise}
+              onRefresh={handleSurpriseMe}
+              fetchBatch={fetchRouletteBatch}
+              filters={filters}
+              onOpenFilter={() => setIsFilterOpen(true)}
+              bookmarks={bookmarks}
+              onToggleBookmark={handleToggleBookmark}
+              onSelectManga={setSelectedManga}
+              imageLength={settings.surpriseImageLength || 60}
+            />
+
+            {/* Universal DRY Filter Drawer in Surprise Me */}
+            {isFilterOpen && (
+              <div 
+                onClick={() => setIsFilterOpen(false)}
+                className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-md animate-in fade-in duration-200"
+              >
+                <div 
+                  onClick={(e) => e.stopPropagation()}
+                  className="w-full max-w-3xl max-h-[88vh] overflow-y-auto rounded-2xl shadow-2xl"
+                >
+                  <Suspense fallback={null}>
+                    <FilterDrawer
+                      filters={filters}
+                      setFilters={setFilters}
+                      isOpen={true}
+                      onClose={() => setIsFilterOpen(false)}
+                      onReset={() => setFilters(INITIAL_FILTERS)}
+                    />
+                  </Suspense>
+                </div>
+              </div>
+            )}
+          </>
         )}
 
         {/* BOOKMARKS TAB VIEW */}

@@ -1,7 +1,5 @@
 import { useState, useRef, useEffect, memo } from 'react';
-
-// Global memory cache of decoded / loaded cover image URLs across card mounts
-const loadedCoverCache = new Set();
+import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 
 function MangaCard({ 
   manga, 
@@ -15,14 +13,22 @@ function MangaCard({
   nsfwBlur = true,
   onSelectAuthor = null
 }) {
-  const isCoverCached = Boolean(manga.cover_image_url && loadedCoverCache.has(manga.cover_image_url));
-  const [imgLoaded, setImgLoaded] = useState(isCoverCached);
-  const [isNearViewport, setIsNearViewport] = useState(isCoverCached);
+  const isCached = isCoverCached(manga.cover_image_url);
+  const [imgLoaded, setImgLoaded] = useState(isCached);
+  const [isNearViewport, setIsNearViewport] = useState(isCached);
   const cardRef = useRef(null);
+
+  // Sync state if cover changed or became cached
+  useEffect(() => {
+    if (isCoverCached(manga.cover_image_url)) {
+      setImgLoaded(true);
+      setIsNearViewport(true);
+    }
+  }, [manga.cover_image_url]);
 
   // Feature 82: IntersectionObserver Prefetching (400px margin for silky smooth pre-load)
   useEffect(() => {
-    if (isCoverCached || !cardRef.current) return;
+    if (isCached || !cardRef.current) return;
     const observer = new IntersectionObserver(
       (entries) => {
         entries.forEach((entry) => {
@@ -36,12 +42,10 @@ function MangaCard({
     );
     observer.observe(cardRef.current);
     return () => observer.disconnect();
-  }, [manga.cover_image_url, isCoverCached]);
+  }, [manga.cover_image_url, isCached]);
 
   const handleImageLoaded = () => {
-    if (manga.cover_image_url) {
-      loadedCoverCache.add(manga.cover_image_url);
-    }
+    markCoverCached(manga.cover_image_url);
     setImgLoaded(true);
   };
 

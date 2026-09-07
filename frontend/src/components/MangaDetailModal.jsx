@@ -1,4 +1,47 @@
 import { useState, useEffect } from 'react';
+import { isCoverCached, markCoverCached } from '../utils/imageUtils';
+
+function SimilarCoverItem({ item, onSelect }) {
+  const isCached = isCoverCached(item.cover_image_url);
+  const [loaded, setLoaded] = useState(isCached);
+
+  useEffect(() => {
+    if (isCoverCached(item.cover_image_url)) {
+      setLoaded(true);
+    }
+  }, [item.cover_image_url]);
+
+  return (
+    <div 
+      onClick={() => onSelect(item)}
+      className="w-28 sm:w-32 shrink-0 group relative aspect-[2/3] rounded-2xl overflow-hidden cursor-pointer border border-[var(--border-color)] hover:border-[var(--accent-vermillion)] transition-all duration-200 shadow-md bg-black"
+    >
+      {!loaded && item.cover_image_url && (
+        <div className="absolute inset-0 shimmer-paper-loading z-10 flex flex-col items-center justify-center p-2">
+          <span className="text-[10px] font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
+        </div>
+      )}
+      <img 
+        src={item.cover_image_url} 
+        alt={item.title}
+        referrerPolicy="no-referrer"
+        decoding="async"
+        onLoad={() => {
+          markCoverCached(item.cover_image_url);
+          setLoaded(true);
+        }}
+        className={`w-full h-full object-cover transition-all duration-300 group-hover:scale-110 ${
+          loaded ? 'opacity-100' : 'opacity-0'
+        }`}
+      />
+      <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent opacity-90 p-2.5 flex flex-col justify-end">
+        <span className="text-[11px] font-serif-jp font-bold text-white line-clamp-2 leading-tight">
+          {item.title}
+        </span>
+      </div>
+    </div>
+  );
+}
 
 const hoverBorderMap = {
   vermillion: 'hover:border-[var(--accent-vermillion)]',
@@ -22,6 +65,13 @@ export default function MangaDetailModal({
   const [similar, setSimilar] = useState([]);
   const [loadingSimilar, setLoadingSimilar] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [coverLoaded, setCoverLoaded] = useState(() => isCoverCached(manga?.cover_image_url));
+
+  useEffect(() => {
+    if (manga?.cover_image_url) {
+      setCoverLoaded(isCoverCached(manga.cover_image_url));
+    }
+  }, [manga?.cover_image_url]);
 
   const matchPct = manga?.similarity_score !== undefined ? Math.round(manga.similarity_score * 100) : null;
   const activeHover = hoverBorderMap[hoverAccent] || hoverBorderMap.vermillion;
@@ -187,11 +237,25 @@ export default function MangaDetailModal({
 
               {/* Framed Print Cover */}
               <div className="relative group w-full max-w-[260px] md:max-w-none aspect-[2/3] rounded-2xl overflow-hidden border border-[var(--border-color)] shadow-lg bg-black/40">
+                {/* Feature 34: Shimmer Paper Skeleton Loader matching search cards */}
+                {!coverLoaded && manga.cover_image_url && (
+                  <div className="absolute inset-0 shimmer-paper-loading z-10 flex flex-col items-center justify-center p-4">
+                    <span className="text-base font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
+                  </div>
+                )}
+
                 <img 
                   src={manga.cover_image_url} 
                   alt={manga.title}
                   referrerPolicy="no-referrer"
+                  decoding="async"
+                  onLoad={() => {
+                    markCoverCached(manga.cover_image_url);
+                    setCoverLoaded(true);
+                  }}
                   className={`w-full h-full object-cover transition-all duration-300 ${
+                    coverLoaded ? 'opacity-100' : 'opacity-0'
+                  } ${
                     nsfwBlur && isMature ? 'blur-md group-hover:blur-none scale-105' : ''
                   }`}
                 />
@@ -348,23 +412,11 @@ export default function MangaDetailModal({
               ) : similar.length > 0 ? (
                 <div className="flex gap-3.5 overflow-x-auto pb-2 no-scrollbar">
                   {similar.map(s => (
-                    <div 
-                      key={s.id}
-                      onClick={() => onSelectManga(s)}
-                      className="w-28 sm:w-32 shrink-0 group relative aspect-[2/3] rounded-2xl overflow-hidden cursor-pointer border border-[var(--border-color)] hover:border-[var(--accent-vermillion)] transition-all duration-200 shadow-md bg-black"
-                    >
-                      <img 
-                        src={s.cover_image_url} 
-                        alt={s.title}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-110"
-                      />
-                      <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent opacity-90 p-2.5 flex flex-col justify-end">
-                        <span className="text-[11px] font-serif-jp font-bold text-white line-clamp-2 leading-tight">
-                          {s.title}
-                        </span>
-                      </div>
-                    </div>
+                    <SimilarCoverItem 
+                      key={s.id} 
+                      item={s} 
+                      onSelect={onSelectManga} 
+                    />
                   ))}
                 </div>
               ) : (

@@ -43,7 +43,8 @@ async def roulette(request: RouletteRequest, db: AsyncSession = Depends(get_db))
         volumes=item.get("volumes"),
         average_score=item.get("average_score"),
         similarity_score=item.get("similarity_score", 0.88),
-        llm_reasoning="Discovery Roulette candidate."
+        llm_reasoning="Discovery Roulette candidate.",
+        format_type=item.get("format_type")
     )
 
 @router.post("/roulette/batch", response_model=List[RecommendationResult])
@@ -75,7 +76,8 @@ async def roulette_batch(request: RouletteRequest, db: AsyncSession = Depends(ge
             volumes=item.get("volumes"),
             average_score=item.get("average_score"),
             similarity_score=item.get("similarity_score", 0.88),
-            llm_reasoning="Discovery Roulette candidate."
+            llm_reasoning="Discovery Roulette candidate.",
+            format_type=item.get("format_type")
         ))
     return out
 
@@ -128,7 +130,8 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
             volumes=m.volumes,
             average_score=m.average_score,
             similarity_score=c["similarity_score"],
-            llm_reasoning=reasoning_map.get(m.id)
+            llm_reasoning=reasoning_map.get(m.id),
+            format_type=getattr(m, "format_type", None) or c.get("format_type")
         ))
         
     response = RecommendResponse(
