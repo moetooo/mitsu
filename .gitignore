@@ -38,6 +38,7 @@ Thumbs.db
 *.md
 !README.md
 !readme.md
+!ARCHITECTURE.md
 
 query_db.py
 scratch/
