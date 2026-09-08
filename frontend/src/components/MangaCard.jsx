@@ -146,7 +146,7 @@ function MangaCard({
           className={`absolute top-2.5 left-2.5 w-7 h-7 rounded-full flex items-center justify-center border transition-all duration-200 z-20 cursor-pointer opacity-0 group-hover:opacity-100 ${
             isBookmarked 
               ? 'bg-[var(--accent-vermillion)] text-white border-[var(--accent-vermillion)] scale-105 shadow-sm' 
-              : 'bg-black/60 text-white/80 border-white/20 hover:text-white hover:bg-black/90'
+              : 'bg-[var(--surface-color)]/75 text-[var(--text-color)] border-[var(--border-color)] hover:text-[var(--accent-vermillion)] hover:bg-[var(--surface-color)]/95'
           }`}
           title={isBookmarked ? "Remove Bookmark" : "Save Bookmark"}
         >

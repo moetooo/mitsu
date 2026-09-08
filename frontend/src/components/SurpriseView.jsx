@@ -424,7 +424,7 @@ export default function SurpriseView({
             type="button"
             onClick={onClose}
             aria-label="Close Profile"
-            className="w-7 h-7 rounded-full bg-black/40 hover:bg-[var(--accent-vermillion)] border border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-[var(--text-muted)] hover:text-white flex items-center justify-center transition-all cursor-pointer text-xs"
+            className="w-7 h-7 rounded-full bg-[var(--surface-color)]/80 hover:bg-[var(--accent-vermillion)] border border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-[var(--text-color)] hover:text-white flex items-center justify-center transition-all cursor-pointer text-xs"
           >
             ✕
           </button>
@@ -455,12 +455,12 @@ export default function SurpriseView({
               </span>
             ) : null}
             {mangaItem.chapters ? (
-              <span className="bg-black/40 text-neutral-300 px-2.5 py-1 rounded-full border border-[var(--border-color)]">
+              <span className="bg-[var(--surface-color)] text-[var(--text-color)] px-2.5 py-1 rounded-full border border-[var(--border-color)] shadow-sm">
                 {mangaItem.chapters} CHAPTERS
               </span>
             ) : null}
             {mangaItem.start_year ? (
-              <span className="bg-black/40 text-neutral-300 px-2.5 py-1 rounded-full border border-[var(--border-color)]">
+              <span className="bg-[var(--surface-color)] text-[var(--text-color)] px-2.5 py-1 rounded-full border border-[var(--border-color)] shadow-sm">
                 YEAR {mangaItem.start_year}
               </span>
             ) : null}
@@ -471,7 +471,7 @@ export default function SurpriseView({
             {(Array.isArray(mangaItem.genres) ? mangaItem.genres : []).map((genre, gIdx) => (
               <span 
                 key={typeof genre === 'string' ? genre : gIdx}
-                className="text-[9px] font-mono bg-black/40 border border-[var(--border-color)] text-neutral-300 px-2.5 py-0.5 rounded-full"
+                className="text-[9px] font-mono bg-[var(--surface-color)] border border-[var(--border-color)] text-[var(--text-color)] px-2.5 py-0.5 rounded-full shadow-sm"
               >
                 #{typeof genre === 'string' ? genre : String(genre)}
               </span>
@@ -495,7 +495,7 @@ export default function SurpriseView({
             href={anilistUrl} 
             target="_blank" 
             rel="noopener noreferrer"
-            className="w-full py-2.5 rounded-xl bg-black/40 hover:bg-[var(--accent-vermillion)] text-[var(--text-color)] hover:text-white font-mono text-xs font-bold text-center border border-[var(--border-color)] hover:border-[var(--accent-vermillion)] transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm group/btn"
+            className="w-full py-2.5 rounded-xl bg-[var(--surface-color)] hover:bg-[var(--accent-vermillion)] text-[var(--text-color)] hover:text-white font-mono text-xs font-bold text-center border border-[var(--border-color)] hover:border-[var(--accent-vermillion)] transition-all flex items-center justify-center gap-2 cursor-pointer shadow-sm group/btn"
           >
             <span>View on AniList</span>
             <span className="text-xs transition-transform group-hover/btn:translate-x-0.5 group-hover/btn:-translate-y-0.5">↗</span>
@@ -509,7 +509,7 @@ export default function SurpriseView({
   const renderCard = (mangaItem, isActive = false) => {
     if (!mangaItem) return null;
     const isBookmarked = Array.isArray(bookmarks) ? bookmarks.some(b => b?.id === mangaItem.id) : false;
-    const allowHover = isActive && !isSliding;
+    const allowHover = isActive && !isSliding && !(isDesktop && isDetailsOpen);
 
     const cardTitle = typeof mangaItem.title === 'string' 
       ? mangaItem.title 
@@ -534,7 +534,7 @@ export default function SurpriseView({
 
         {/* 2. FLOATING TOP HEADER (Status pill & Universal Ribbon Bookmark button) */}
         <div className="absolute top-4 left-5 right-5 flex items-center justify-between z-20 pointer-events-auto">
-          <span className="text-[9px] font-mono tracking-widest text-white uppercase bg-black/65 backdrop-blur-md px-3 py-1 rounded-full border border-white/15 shadow-sm">
+          <span className="text-[9px] font-mono tracking-widest text-[var(--text-color)] uppercase bg-[var(--surface-color)]/75 backdrop-blur-md px-3 py-1 rounded-full border border-[var(--border-color)] shadow-sm">
             {mangaItem.format_type ? `${mangaItem.format_type} • ` : 'MANGA • '}
             {mangaItem.status || 'COMPLETED'}
           </span>
@@ -551,7 +551,7 @@ export default function SurpriseView({
             className={`w-8 h-8 rounded-full flex items-center justify-center border transition-all duration-200 cursor-pointer shadow-sm ${
               isBookmarked 
                 ? 'bg-[var(--accent-vermillion)] text-white border-[var(--accent-vermillion)] scale-105 shadow-sm' 
-                : 'bg-black/65 text-white/80 border-white/20 hover:text-white hover:bg-black/90'
+                : 'bg-[var(--surface-color)]/75 text-[var(--text-color)] border-[var(--border-color)] hover:text-[var(--accent-vermillion)] hover:bg-[var(--surface-color)]/95'
             }`}
           >
             <svg className="w-3.5 h-3.5" fill={isBookmarked ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor">
@@ -568,14 +568,14 @@ export default function SurpriseView({
               setMobileDetailsOpen(prev => !prev);
             }
           }}
-          className={`absolute inset-x-0 bottom-0 z-20 p-5 pt-3.5 bg-gradient-to-t from-[var(--surface-color)] via-[var(--surface-color)]/95 to-[var(--surface-color)]/85 backdrop-blur-xl border-t border-white/10 rounded-b-[36px] transition-all duration-350 flex flex-col justify-end ${
+          className={`absolute inset-x-0 bottom-0 z-20 p-5 pt-3.5 bg-gradient-to-t from-[var(--surface-color)] via-[var(--surface-color)]/95 to-[var(--surface-color)]/85 border-t border-[var(--border-color)] transition-all duration-350 flex flex-col justify-end ${
             (mobileDetailsOpen || allowHover) ? 'group-hover:shadow-2xl' : ''
           }`}
         >
           {/* Header Peek Area (Always visible at bottom of card, perfectly stable) */}
           <div className="flex items-center justify-between gap-3 shrink-0 cursor-pointer">
             <div className="min-w-0 flex-1">
-              <h3 className="font-serif-jp text-base sm:text-lg font-bold text-white tracking-tight truncate leading-snug">
+              <h3 className="font-serif-jp text-base sm:text-lg font-bold text-[var(--text-color)] tracking-tight truncate leading-snug">
                 {cardTitle}
               </h3>
               <p className="text-[11px] font-mono text-[var(--text-muted)] truncate pt-0.5">
@@ -585,7 +585,7 @@ export default function SurpriseView({
 
             {/* Score Badge */}
             <div className="shrink-0 flex items-center gap-1.5">
-              <span className="text-[10px] font-mono text-[var(--accent-vermillion)] font-bold bg-black/60 px-2 py-0.5 rounded-full border border-white/15">
+              <span className="text-[10px] font-mono text-[var(--accent-vermillion)] font-bold bg-[var(--surface-color)]/80 px-2 py-0.5 rounded-full border border-[var(--border-color)]">
                 ★ {mangaItem.score ? (mangaItem.score / 10).toFixed(1) : (mangaItem.bayesian_rating ? mangaItem.bayesian_rating.toFixed(1) : (mangaItem.average_score ? (mangaItem.average_score / 10).toFixed(1) : '9.0'))}
               </span>
             </div>
@@ -601,8 +601,8 @@ export default function SurpriseView({
               
               {/* FINALIZED MOON CREST ❖ DIVIDER */}
               <div className="relative w-full py-0.5 flex items-center justify-center shrink-0">
-                <div className="absolute inset-x-3 top-1/2 -translate-y-1/2 h-[1px] bg-gradient-to-r from-transparent via-white/20 to-transparent pointer-events-none" />
-                <div className="relative px-2.5 py-0.5 bg-[var(--surface-color)] rounded-full border border-white/15 text-[10px] text-[var(--accent-vermillion)] font-bold shadow-sm tracking-widest flex items-center gap-1 z-10">
+                <div className="absolute inset-x-3 top-1/2 -translate-y-1/2 h-[1px] bg-gradient-to-r from-transparent via-[var(--border-color)] to-transparent pointer-events-none" />
+                <div className="relative px-2.5 py-0.5 bg-[var(--surface-color)] rounded-full border border-[var(--border-color)] text-[10px] text-[var(--accent-vermillion)] font-bold shadow-sm tracking-widest flex items-center gap-1 z-10">
                   <span>❖</span>
                 </div>
               </div>
@@ -615,7 +615,7 @@ export default function SurpriseView({
                 ).slice(0, 3).map((genre, gIdx) => (
                   <span 
                     key={typeof genre === 'string' ? genre : gIdx}
-                    className="font-mono rounded-full bg-black/40 border border-[var(--border-color)] text-neutral-300 px-2.5 py-0.5 text-[9px]"
+                    className="font-mono rounded-full bg-[var(--surface-color)] border border-[var(--border-color)] text-[var(--text-color)] px-2.5 py-0.5 text-[9px] shadow-sm"
                   >
                     #{typeof genre === 'string' ? genre : String(genre)}
                   </span>
@@ -636,7 +636,7 @@ export default function SurpriseView({
                 }}
                 className={`w-full py-2.5 rounded-full font-mono text-xs font-bold tracking-wider hover:opacity-95 active:scale-95 transition-all shadow-md flex items-center justify-center gap-2 cursor-pointer mt-1 ${
                   isDetailsOpen && isActive
-                    ? 'bg-black/60 border border-[var(--border-color)] text-neutral-200 hover:border-[var(--accent-vermillion)] hover:text-white'
+                    ? 'bg-[var(--surface-color)] border border-[var(--border-color)] text-[var(--text-color)] hover:border-[var(--accent-vermillion)] hover:text-[var(--accent-vermillion)]'
                     : 'bg-[var(--accent-vermillion)] text-white'
                 }`}
               >
@@ -763,7 +763,7 @@ export default function SurpriseView({
             className={`w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[var(--surface-color)]/95 backdrop-blur-xl border flex items-center justify-center shadow-[0_8px_25px_rgba(0,0,0,0.5)] transition-all ${
               currentIndex === 0 
                 ? 'opacity-30 border-[var(--border-color)] text-[var(--text-muted)] cursor-not-allowed'
-                : 'opacity-100 border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-white hover:text-[var(--accent-vermillion)] hover:scale-110 active:scale-95 cursor-pointer'
+                : 'opacity-100 border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-[var(--text-color)] hover:text-[var(--accent-vermillion)] hover:scale-110 active:scale-95 cursor-pointer'
             }`}
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -772,7 +772,7 @@ export default function SurpriseView({
           </button>
 
           {/* Minimal Stream Index Badge */}
-          <span className="font-mono text-[9px] sm:text-[10px] text-[var(--text-muted)] bg-black/60 backdrop-blur-md px-2.5 py-1 rounded-full border border-white/10 shadow-sm select-none">
+          <span className="font-mono text-[9px] sm:text-[10px] text-[var(--text-muted)] bg-[var(--surface-color)]/75 backdrop-blur-md px-2.5 py-1 rounded-full border border-[var(--border-color)] shadow-sm select-none">
             #{String(currentIndex + 1).padStart(2, '0')}
           </span>
 
@@ -781,7 +781,7 @@ export default function SurpriseView({
             type="button"
             onClick={handleNext}
             aria-label="Next Manga"
-            className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[var(--surface-color)]/95 backdrop-blur-xl border border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-white hover:text-[var(--accent-vermillion)] hover:scale-110 active:scale-95 flex items-center justify-center shadow-[0_8px_25px_rgba(0,0,0,0.5)] transition-all cursor-pointer"
+            className="w-11 h-11 sm:w-12 sm:h-12 rounded-full bg-[var(--surface-color)]/95 backdrop-blur-xl border border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-[var(--text-color)] hover:text-[var(--accent-vermillion)] hover:scale-110 active:scale-95 flex items-center justify-center shadow-[0_8px_25px_rgba(0,0,0,0.5)] transition-all cursor-pointer"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
@@ -802,7 +802,7 @@ export default function SurpriseView({
             className="w-full max-w-md max-h-[82vh] rounded-[32px] bg-[var(--surface-color)]/98 backdrop-blur-2xl border border-[var(--border-color)] shadow-2xl p-5 overflow-hidden flex flex-col justify-between animate-in slide-in-from-bottom duration-300"
           >
             {/* Grab handle */}
-            <div className="w-12 h-1.5 rounded-full bg-white/20 mx-auto -mt-1 mb-3" />
+            <div className="w-12 h-1.5 rounded-full bg-[var(--text-muted)]/30 mx-auto -mt-1 mb-3" />
             {renderDossierContent(titles[currentIndex] || manga, () => setIsDetailsOpen(false))}
           </div>
         </div>
@@ -817,7 +817,7 @@ export default function SurpriseView({
         className={`fixed bottom-6 right-6 w-12 h-12 rounded-full bg-[var(--surface-color)]/95 backdrop-blur-xl border flex items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.5)] transition-all cursor-pointer z-40 pointer-events-auto ${
           hasActiveFilters 
             ? 'border-[var(--accent-vermillion)] text-[var(--accent-vermillion)] scale-105 shadow-[0_0_15px_rgba(230,57,70,0.3)]' 
-            : 'border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-white hover:text-[var(--accent-vermillion)] hover:scale-110 active:scale-95'
+            : 'border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-[var(--text-color)] hover:text-[var(--accent-vermillion)] hover:scale-110 active:scale-95'
         }`}
       >
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
