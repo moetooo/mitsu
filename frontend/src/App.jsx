@@ -408,7 +408,9 @@ export default function App() {
         theme={settings?.theme || 'sumi'}
       />
 
-      <div className={`max-w-7xl mx-auto px-4 md:px-8 ${
+      <div 
+        key={activeTab}
+        className={`animate-tab-fade-in max-w-7xl mx-auto px-4 md:px-8 ${
         activeTab === 'surprise' ? 'py-0 h-[calc(100vh-76px)] overflow-hidden flex flex-col items-center justify-center' : 'py-6 space-y-8'
       }`}>
 
