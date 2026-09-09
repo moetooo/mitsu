@@ -6,7 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db_models import Manga
 
-WORD_RE = re.compile(r"[a-z0-9]+(?:['-][a-z0-9]+)*")
+WORD_RE = re.compile(r"[a-z0-9]+(?:['-][a-z0-9]+)*", re.IGNORECASE)
 MIN_TOKEN_LENGTH = 4
 MAX_VOCABULARY_SIZE = 100_000
 
@@ -75,7 +75,11 @@ def _correction_for_token(token: str, vocabulary: Set[str]) -> str:
         return token
     if len(ranked) > 1 and ranked[0][0] == ranked[1][0]:
         return token
-    return ranked[0][1]
+    
+    replacement = ranked[0][1]
+    if token.istitle():
+        return replacement.capitalize()
+    return replacement
 
 
 async def autocorrect_query(query: str, db: AsyncSession) -> str:

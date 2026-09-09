@@ -1,11 +1,13 @@
 import time
 from typing import List
 from fastapi import APIRouter, Depends
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import RecommendRequest, RecommendResponse, RecommendationResult, RouletteRequest
+from ..db_models import Manga
 from ..db import get_db
 from ..services.embedding import generate_embedding
-from ..services.retrieval import retrieve_similar_manga, retrieve_roulette_manga
+from ..services.retrieval import retrieve_similar_manga, retrieve_roulette_manga, find_matched_title
 from ..services.llm import generate_reasoning
 from ..services.cache import get_cached, set_cached, generate_cache_key
 from ..services.search_autocorrect import autocorrect_query
@@ -96,23 +98,83 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
     if cached_response:
         return cached_response
         
-    # 2. Embed Query
-    t0 = time.time()
-    query_embedding = await generate_embedding(request.query)
-    query_embedding_ms = (time.time() - t0) * 1000
+    # 2. Title matching with typo tolerance or semantic retrieval
+    matched_title = await find_matched_title(db, request.query) if request.query else None
     
-    # 3. Retrieve
-    offset = (request.page - 1) * request.limit
+    if matched_title:
+        mid, matched_name, target_emb, _ = matched_title
+        corrected_query = matched_name
+        query_embedding_ms = 0.0
+        
+        t0 = time.time()
+        top_candidates = []
+        if request.page == 1:
+            res = await db.execute(select(Manga).where(Manga.id == mid))
+            target_manga = res.scalar_one_or_none()
+            if target_manga:
+                top_candidates.append({
+                    "manga": target_manga,
+                    "similarity_score": 0.96,
+                    "hybrid_score": 0.96,
+                    "format_type": getattr(target_manga, "format_type", None)
+                })
+        
+        needed_limit = request.limit - len(top_candidates) if request.page == 1 else request.limit
+        target_offset = 0 if request.page == 1 else ((request.page - 1) * request.limit - 1)
+        
+        if needed_limit > 0:
+            similar_candidates = await retrieve_similar_manga(
+                session=db,
+                query_embedding=target_emb,
+                filters=request.filters,
+                limit=needed_limit + 5,
+                offset=target_offset
+            )
+            for c in similar_candidates:
+                if c["manga"].id != mid:
+                    top_candidates.append(c)
+                if len(top_candidates) >= request.limit:
+                    break
+        retrieval_ms = (time.time() - t0) * 1000
+    else:
+        # Standard semantic / thematic search
+        t0 = time.time()
+        query_embedding = await generate_embedding(request.query)
+        query_embedding_ms = (time.time() - t0) * 1000
+        
+        offset = (request.page - 1) * request.limit
+        t0 = time.time()
+        top_candidates = await retrieve_similar_manga(
+            session=db,
+            query_embedding=query_embedding,
+            filters=request.filters,
+            limit=request.limit,
+            offset=offset,
+            query_text=request.query
+        )
+        retrieval_ms = (time.time() - t0) * 1000
+        corrected_query = request.query
+
+    # If no matching candidates (e.g. gibberish or zero-relevance query), skip LLM and return empty
+    if not top_candidates:
+        response = RecommendResponse(
+            results=[],
+            corrected_query=corrected_query,
+            query_embedding_ms=query_embedding_ms,
+            retrieval_ms=retrieval_ms,
+            llm_ms=0.0,
+            total_duration_ms=(time.time() - start_time) * 1000,
+            has_more=False
+        )
+        await set_cached(cache_key, response.model_dump(), ttl=1800)
+        return response
+
+    # 3. LLM Reasoning
     t0 = time.time()
-    top_candidates = await retrieve_similar_manga(db, query_embedding, request.filters, limit=request.limit, offset=offset)
-    retrieval_ms = (time.time() - t0) * 1000
-    
-    # 4. LLM Reasoning
-    t0 = time.time()
-    reasoning_map = await generate_reasoning(request.query, top_candidates)
+    reasoning_map = await generate_reasoning(corrected_query, top_candidates)
     llm_ms = (time.time() - t0) * 1000
     
-    # 5. Format Response
+    # 4. Format Response
     results = []
     for c in top_candidates:
         m = c["manga"]
@@ -136,7 +198,7 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         
     response = RecommendResponse(
         results=results,
-        corrected_query=request.query,
+        corrected_query=corrected_query,
         query_embedding_ms=query_embedding_ms,
         retrieval_ms=retrieval_ms,
         llm_ms=llm_ms
