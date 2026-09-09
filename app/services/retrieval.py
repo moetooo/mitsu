@@ -6,7 +6,7 @@ import time
 import re
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Optional, Dict, Any, Set
+from typing import List, Optional, Dict, Any, Set, Tuple
 from ..db_models import Manga
 from ..models import RecommendFilters
 from ..services import cache
@@ -162,15 +162,79 @@ def infer_format_type(
 
     return "MANGA"
 
+async def find_matched_title(
+    session: AsyncSession,
+    query: str
+) -> Optional[Tuple[int, str, List[float], float]]:
+    """
+    Identifies if a search query targets a specific manga title (including typos/misspellings)
+    using exact matching, prefix matching, and trigram/word similarity via pg_trgm GIN indexes.
+    Returns (manga_id, matched_title, embedding_list, match_score) or None.
+    """
+    clean_q = query.strip().lower()
+    if len(clean_q) < 3:
+        return None
+
+    # 1. Exact title match (case-insensitive)
+    res = await session.execute(text("""
+        SELECT id, title_english, title_romaji, embedding::text, popularity
+        FROM manga
+        WHERE (LOWER(title_english) = :q OR LOWER(title_romaji) = :q)
+          AND embedding IS NOT NULL
+        ORDER BY popularity DESC NULLS LAST
+        LIMIT 1;
+    """), {'q': clean_q})
+    exact = res.fetchone()
+    if exact:
+        try:
+            emb = json.loads(exact[3])
+            return exact[0], exact[1] or exact[2], emb, 1.0
+        except Exception:
+            pass
+
+    # 2. Fast Trigram / word similarity match using GIN indexes
+    await session.execute(text("SET pg_trgm.word_similarity_threshold = 0.40;"))
+    await session.execute(text("SET pg_trgm.similarity_threshold = 0.30;"))
+    res = await session.execute(text("""
+        SELECT id, title_english, title_romaji, embedding::text, popularity,
+               GREATEST(similarity(:q, LOWER(COALESCE(title_english, ''))), similarity(:q, LOWER(COALESCE(title_romaji, '')))) as sim,
+               GREATEST(word_similarity(:q, LOWER(COALESCE(title_english, ''))), word_similarity(:q, LOWER(COALESCE(title_romaji, '')))) as w_sim,
+               (
+                   0.55 * GREATEST(similarity(:q, LOWER(COALESCE(title_english, ''))), similarity(:q, LOWER(COALESCE(title_romaji, ''))))
+                   + 0.25 * GREATEST(word_similarity(:q, LOWER(COALESCE(title_english, ''))), word_similarity(:q, LOWER(COALESCE(title_romaji, ''))))
+                   + 0.20 * (LOG(GREATEST(COALESCE(popularity, 1), 1)) / 6.0)
+               ) as match_score
+        FROM manga
+        WHERE (:q <% title_english OR :q <% title_romaji OR title_english % :q OR title_romaji % :q)
+          AND embedding IS NOT NULL
+        ORDER BY match_score DESC
+        LIMIT 1;
+    """), {'q': clean_q})
+    row = res.fetchone()
+    if row:
+        mid, t_en, t_ro, emb_str, pop, sim, w_sim, score = row
+        if score >= 0.48 or sim >= 0.40 or w_sim >= 0.65:
+            try:
+                emb = json.loads(emb_str)
+                return mid, t_en or t_ro, emb, float(score)
+            except Exception:
+                pass
+
+    return None
+
 async def retrieve_similar_manga(
     session: AsyncSession,
-    query_embedding: List[float],
+    query_embedding: Any,
     filters: Optional[RecommendFilters] = None,
     limit: int = 20,
-    offset: int = 0
+    offset: int = 0,
+    query_text: Optional[str] = None
 ):
-    emb_list = list(query_embedding) if hasattr(query_embedding, '__iter__') else query_embedding
-    emb_str = "[" + ",".join(map(str, emb_list)) + "]"
+    if isinstance(query_embedding, str):
+        emb_str = query_embedding
+    else:
+        emb_list = list(query_embedding) if hasattr(query_embedding, '__iter__') else query_embedding
+        emb_str = "[" + ",".join(map(str, emb_list)) + "]"
     
     where_clauses = ["embedding IS NOT NULL"]
     params: Dict[str, Any] = {"emb": emb_str, "limit": limit, "offset": offset}
@@ -212,10 +276,48 @@ async def retrieve_similar_manga(
 
     where_str = " AND ".join(where_clauses)
 
-    min_pct_filter = ""
+    has_query_text = bool(query_text and query_text.strip())
+    if has_query_text:
+        clean_q = query_text.strip().lower()
+        params["clean_q"] = clean_q
+        params["prefix_q"] = f"{clean_q}%"
+        params["contain_q"] = f"%{clean_q}%"
+        title_boost_select = """
+            CASE 
+              WHEN LOWER(COALESCE(title_english, '')) = :clean_q OR LOWER(COALESCE(title_romaji, '')) = :clean_q OR LOWER(COALESCE(title_native, '')) = :clean_q THEN 1.0
+              WHEN LOWER(COALESCE(title_english, '')) LIKE :prefix_q OR LOWER(COALESCE(title_romaji, '')) LIKE :prefix_q THEN 0.6
+              WHEN LOWER(COALESCE(title_english, '')) LIKE :contain_q OR LOWER(COALESCE(title_romaji, '')) LIKE :contain_q THEN 0.3
+              ELSE 0.0
+            END as title_boost,
+        """
+        score_calc = """
+            (
+              0.55 * sim +
+              0.30 * title_boost +
+              0.08 * (COALESCE(average_score, 50) / 100.0) +
+              0.07 * (LOG(GREATEST(COALESCE(popularity, 1), 1)) / 6.0)
+            ) as hybrid_score
+        """
+    else:
+        title_boost_select = "0.0 as title_boost,"
+        score_calc = """
+            (
+              0.70 * sim +
+              0.18 * (COALESCE(average_score, 50) / 100.0) +
+              0.12 * (LOG(GREATEST(COALESCE(popularity, 1), 1)) / 6.0)
+            ) as hybrid_score
+        """
+
+    relevance_conditions = []
+    if has_query_text:
+        relevance_conditions.append("(title_boost > 0 OR sim >= 0.44)")
     if filters and filters.min_match_pct and filters.min_match_pct > 0:
         params["min_pct"] = float(filters.min_match_pct)
-        min_pct_filter = "WHERE hybrid_score >= :min_pct"
+        relevance_conditions.append("hybrid_score >= :min_pct")
+
+    where_filter_sql = ""
+    if relevance_conditions:
+        where_filter_sql = "WHERE " + " AND ".join(relevance_conditions)
 
     sql = text(f"""
         WITH ranked AS (
@@ -240,6 +342,7 @@ async def retrieve_similar_manga(
             banner_image,
             site_url,
             (1 - (embedding <=> CAST(:emb AS vector))) as sim,
+            {title_boost_select}
             ROW_NUMBER() OVER (
               PARTITION BY LOWER(COALESCE(title_english, title_romaji, id::text)) 
               ORDER BY (1 - (embedding <=> CAST(:emb AS vector))) DESC, popularity DESC NULLS LAST
@@ -249,17 +352,13 @@ async def retrieve_similar_manga(
         ),
         scored AS (
           SELECT *,
-            (
-              0.70 * sim +
-              0.18 * (COALESCE(average_score, 50) / 100.0) +
-              0.12 * (LOG(GREATEST(COALESCE(popularity, 1), 1)) / 6.0)
-            ) as hybrid_score
+            {score_calc}
           FROM ranked
           WHERE rn = 1
         )
         SELECT *
         FROM scored
-        {min_pct_filter}
+        {where_filter_sql}
         ORDER BY hybrid_score DESC, id ASC
         LIMIT :limit OFFSET :offset;
     """)
@@ -291,9 +390,17 @@ async def retrieve_similar_manga(
         m.site_url = r.site_url
         m.format_type = infer_format_type(r.title_native, r.tags, r.genres, r.site_url)
 
+        score_val = float(r.hybrid_score)
+        # Boost perceived match percentage for exact/prefix title matches
+        if hasattr(r, 'title_boost'):
+            if r.title_boost >= 1.0:
+                score_val = max(score_val, 0.96)
+            elif r.title_boost >= 0.6:
+                score_val = max(score_val, 0.88)
+
         candidates.append({
             "manga": m,
-            "similarity_score": float(r.hybrid_score),
+            "similarity_score": score_val,
             "format_type": m.format_type
         })
 
