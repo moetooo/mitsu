@@ -175,6 +175,9 @@ async def retrieve_similar_manga(
     where_clauses = ["embedding IS NOT NULL"]
     params: Dict[str, Any] = {"emb": emb_str, "limit": limit, "offset": offset}
     
+    if isinstance(filters, dict):
+        filters = RecommendFilters(**filters)
+
     allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
     if not allow_nsfw:
         where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")

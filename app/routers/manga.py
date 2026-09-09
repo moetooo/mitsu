@@ -5,7 +5,7 @@ from typing import List, Optional
 import httpx
 from ..db import get_db
 from ..db_models import Manga
-from ..models import MangaDetail, RecommendationResult
+from ..models import MangaDetail, RecommendationResult, RecommendFilters
 from ..services.retrieval import retrieve_similar_manga
 from ..services.cache import get_cached, set_cached
 
@@ -339,7 +339,7 @@ async def get_similar_manga(manga_id: int, limit: int = 6, allow_nsfw: bool = Fa
         candidates = await retrieve_similar_manga(
             session=db,
             query_embedding=manga.embedding,
-            filters={"nsfw": allow_nsfw},
+            filters=RecommendFilters(nsfw=allow_nsfw),
             limit=limit + 1
         )
     
