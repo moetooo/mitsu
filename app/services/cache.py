@@ -11,7 +11,7 @@ def generate_cache_key(prefix: str, data: Any) -> str:
     hash_obj = hashlib.md5(data_str.encode())
     return f"{prefix}:{hash_obj.hexdigest()}"
 
-async def get_cached(key: str) -> Optional[dict]:
+async def get_cached(key: str) -> Optional[Any]:
     try:
         val = await redis_client.get(key)
         if val:
@@ -20,7 +20,7 @@ async def get_cached(key: str) -> Optional[dict]:
         print(f"Redis get error: {e}")
     return None
 
-async def set_cached(key: str, data: dict, ttl: int = 3600):
+async def set_cached(key: str, data: Any, ttl: int = 3600):
     try:
         await redis_client.set(key, json.dumps(data), ex=ttl)
     except Exception as e:
@@ -49,7 +49,7 @@ async def pop_roulette_pool(filter_hash: str, count: int = 1) -> List[dict]:
     try:
         for _ in range(count):
             val = await redis_client.lpop(key)
-            if val:
+            if isinstance(val, (str, bytes)):
                 results.append(json.loads(val))
             else:
                 break

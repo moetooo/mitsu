@@ -160,6 +160,23 @@ export default function MangaDetailModal({
         className="absolute inset-0 bg-black/80 backdrop-blur-sm transition-all"
         onClick={onClose}
       />
+
+      {/* Feature 314: Atmospheric Dynamic Ambient Glow Sync */}
+      {manga && (manga.banner_image || manga.cover_image_url) && (
+        <div 
+          className="absolute inset-0 overflow-hidden pointer-events-none z-0 flex items-center justify-center transition-all duration-700 ease-out"
+          aria-hidden="true"
+        >
+          <img
+            src={manga.banner_image || manga.cover_image_url}
+            alt=""
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover scale-125 blur-3xl opacity-30 saturate-150 transform-gpu"
+          />
+          {/* Soft dark radial vignette to frame the diffused ambient projection */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-black/40 to-black/90" />
+        </div>
+      )}
       
       {/* Washi/Sumi Japanese Modal Box */}
       <div className="relative bg-[var(--surface-color)] border border-[var(--border-color)] w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-3xl shadow-2xl flex flex-col z-10 text-[var(--text-color)]">

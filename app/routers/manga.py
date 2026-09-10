@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
-from typing import List, Optional
+from typing import List, Optional, Any, Dict
 import httpx
 from ..db import get_db
 from ..db_models import Manga
@@ -10,13 +10,13 @@ from ..services.retrieval import retrieve_similar_manga
 from ..services.cache import get_cached, set_cached
 
 import random
-from datetime import datetime
+from datetime import datetime, timezone
 
 router = APIRouter()
 
 @router.get("/manga/featured", response_model=List[RecommendationResult])
 async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db)):
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     slot_minute = (now.minute // 15) * 15
     time_slot_str = f"{now.strftime('%Y-%m-%d-%H')}-{slot_minute:02d}"
     cache_key = f"manga:featured_mix:{time_slot_str}:{limit}"
@@ -57,10 +57,10 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
 
     rng = random.Random(time_slot_str)
     
-    selected_items = []
+    selected_items: List[tuple[Any, str]] = []
     seen_ids = set()
 
-    def pick_from_pool(pool, badge_label, count=2):
+    def pick_from_pool(pool: List[Any], badge_label: str, count: int = 2):
         picked = 0
         pool_shuffled = pool.copy()
         rng.shuffle(pool_shuffled)
@@ -170,7 +170,7 @@ async def get_trending_manga(
           }
         }
         """
-        variables = {"page": page, "perPage": limit}
+        variables: Dict[str, Any] = {"page": page, "perPage": limit}
         if country_code:
             variables["countryOfOrigin"] = country_code
         if genre_clean:
@@ -223,7 +223,7 @@ async def get_trending_manga(
     # If AniList request failed or returned empty results, query local database
     if not trending_results:
         from sqlalchemy import text as sa_text
-        where_clauses = [
+        where_clauses: List[Any] = [
             Manga.cover_image_url.isnot(None),
             (Manga.start_year >= 2020) | (Manga.status == "RELEASING")
         ]
@@ -256,7 +256,7 @@ async def get_trending_manga(
             .limit(limit)
         )
         result = await db.execute(stmt)
-        mangas = result.scalars().all()
+        mangas: List[Any] = list(result.scalars().all())
 
         trending_results = [
             RecommendationResult(
@@ -320,7 +320,7 @@ async def get_similar_manga(manga_id: int, limit: int = 6, allow_nsfw: bool = Fa
         similar_ids = [item["id"] for item in manga.similar_mangas][:limit + 10]
         stmt_sim = select(Manga).where(Manga.id.in_(similar_ids))
         res_sim = await db.execute(stmt_sim)
-        sim_mangas_map = {m.id: m for m in res_sim.scalars().all()}
+        sim_mangas_map: Dict[Any, Any] = {m.id: m for m in res_sim.scalars().all()}
         
         for item in manga.similar_mangas:
             sm_id = item["id"]
