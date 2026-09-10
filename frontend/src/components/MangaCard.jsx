@@ -81,6 +81,22 @@ function MangaCard({
       style={{ contentVisibility: 'auto', containIntrinsicSize: '0 380px' }}
       className={`manga-card-item group relative bg-[var(--surface-color)] border border-[var(--border-color)] rounded-2xl p-3 cursor-pointer shadow-sm hover:shadow-md ${hoverBorderMap[hoverAccent] || hoverBorderMap.vermillion} transition-all duration-150 ease-out hover:scale-[1.02] flex flex-col justify-between`}
     >
+      {/* Feature 314: Atmospheric Dynamic Ambient Glow Sync on Card Hover */}
+      {manga.cover_image_url && (
+        <div 
+          className="absolute -inset-1.5 rounded-2xl pointer-events-none opacity-0 group-hover:opacity-35 transition-opacity duration-300 blur-xl -z-10 overflow-hidden transform-gpu will-change-transform"
+          aria-hidden="true"
+        >
+          <img
+            src={manga.cover_image_url}
+            alt=""
+            referrerPolicy="no-referrer"
+            className="w-full h-full object-cover scale-110 saturate-150"
+            loading="lazy"
+            decoding="async"
+          />
+        </div>
+      )}
 
       {/* Framed Print Cover Container */}
       <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden bg-black/20 border border-[var(--border-color)]">
