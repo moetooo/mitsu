@@ -4,10 +4,9 @@ asyncpg
 SQLAlchemy
 pydantic
 pydantic-settings
-sentence-transformers
+fastembed
 groq
 redis
-celery
 httpx
 pgvector
 brotli-asgi
