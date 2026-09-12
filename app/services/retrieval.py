@@ -35,19 +35,19 @@ def build_genre_sql_condition(genres_list: List[str], exclude: bool = False) -> 
         escaped = g.replace("'", "''")
         low = g.lower()
         if low in ['yaoi', 'bl', "boys' love"]:
-            conditions.append("(genres @> ARRAY['Boys'' Love'] OR tags::text ILIKE '%Boys'' Love%' OR tags::text ILIKE '%Yaoi%')")
+            conditions.append("(genres @> ARRAY['Boys'' Love'] OR tags @> '[{\"name\": \"Boys'' Love\"}]' OR tags @> '[{\"name\": \"Yaoi\"}]')")
         elif low in ['yuri', 'gl', "girls' love"]:
-            conditions.append("(genres @> ARRAY['Girls'' Love'] OR tags::text ILIKE '%Girls'' Love%' OR tags::text ILIKE '%Yuri%')")
+            conditions.append("(genres @> ARRAY['Girls'' Love'] OR tags @> '[{\"name\": \"Girls'' Love\"}]' OR tags @> '[{\"name\": \"Yuri\"}]')")
         elif low in ['shoujo ai', 'shoujo-ai']:
-            conditions.append("(tags::text ILIKE '%Shoujo Ai%' OR tags::text ILIKE '%Girls'' Love%' OR tags::text ILIKE '%Yuri%')")
+            conditions.append("(tags @> '[{\"name\": \"Shoujo Ai\"}]' OR tags @> '[{\"name\": \"Girls'' Love\"}]' OR tags @> '[{\"name\": \"Yuri\"}]')")
         elif low in ['shounen ai', 'shounen-ai']:
-            conditions.append("(tags::text ILIKE '%Shounen Ai%' OR tags::text ILIKE '%Boys'' Love%' OR tags::text ILIKE '%Yaoi%')")
+            conditions.append("(tags @> '[{\"name\": \"Shounen Ai\"}]' OR tags @> '[{\"name\": \"Boys'' Love\"}]' OR tags @> '[{\"name\": \"Yaoi\"}]')")
         elif low in ['shounen', 'shoujo', 'seinen', 'josei']:
-            conditions.append(f"tags::text ILIKE '%\"name\": \"{escaped}\"%'")
+            conditions.append(f"tags @> '[{{\"name\": \"{escaped}\"}}]'")
         elif low in ['harem', 'reverse harem', 'love triangle']:
-            conditions.append(f"tags::text ILIKE '%{escaped}%'")
+            conditions.append(f"tags @> '[{{\"name\": \"{escaped}\"}}]'")
         else:
-            conditions.append(f"(genres @> ARRAY['{escaped}'] OR tags::text ILIKE '%{escaped}%')")
+            conditions.append(f"(genres @> ARRAY['{escaped}'] OR tags @> '[{{\"name\": \"{escaped}\"}}]')")
 
     if not conditions:
         return None
@@ -68,16 +68,16 @@ def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
                 "("
                 "("
                 "title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]' "
-                "OR tags::text ILIKE '%Manhwa%' "
-                "OR tags::text ILIKE '%Webtoon%' "
-                "OR tags::text ILIKE '%Korean%' "
+                "OR tags @> '[{\"name\": \"Manhwa\"}]' "
+                "OR tags @> '[{\"name\": \"Webtoon\"}]' "
+                "OR tags @> '[{\"name\": \"Korean\"}]' "
                 "OR genres @> ARRAY['Manhwa'] "
                 "OR site_url ILIKE '%manhwa%'"
                 ") "
                 "AND NOT ("
-                "tags::text ILIKE '%Manhua%' "
-                "OR tags::text ILIKE '%Chinese%' "
-                "OR tags::text ILIKE '%Ancient China%' "
+                "tags @> '[{\"name\": \"Manhua\"}]' "
+                "OR tags @> '[{\"name\": \"Chinese\"}]' "
+                "OR tags @> '[{\"name\": \"Ancient China\"}]' "
                 "OR genres @> ARRAY['Manhua'] "
                 "OR site_url ILIKE '%manhua%'"
                 ")"
@@ -87,17 +87,17 @@ def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
             fmt_conditions.append(
                 "("
                 "("
-                "tags::text ILIKE '%Manhua%' "
-                "OR tags::text ILIKE '%Chinese%' "
-                "OR tags::text ILIKE '%Ancient China%' "
+                "tags @> '[{\"name\": \"Manhua\"}]' "
+                "OR tags @> '[{\"name\": \"Chinese\"}]' "
+                "OR tags @> '[{\"name\": \"Ancient China\"}]' "
                 "OR genres @> ARRAY['Manhua'] "
                 "OR site_url ILIKE '%manhua%' "
-                "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]' OR title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]') AND (tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Full Color%'))"
+                "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]' OR title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]') AND (tags @> '[{\"name\": \"Long Strip\"}]' OR tags @> '[{\"name\": \"Full Color\"}]'))"
                 ") "
                 "AND NOT ("
                 "title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]' "
-                "OR tags::text ILIKE '%Manhwa%' "
-                "OR tags::text ILIKE '%Korean%' "
+                "OR tags @> '[{\"name\": \"Manhwa\"}]' "
+                "OR tags @> '[{\"name\": \"Korean\"}]' "
                 "OR genres @> ARRAY['Manhwa'] "
                 "OR site_url ILIKE '%manhwa%'"
                 ")"
@@ -107,17 +107,17 @@ def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
             fmt_conditions.append(
                 "NOT ("
                 "title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]' "
-                "OR tags::text ILIKE '%Manhwa%' "
-                "OR tags::text ILIKE '%Webtoon%' "
-                "OR tags::text ILIKE '%Korean%' "
+                "OR tags @> '[{\"name\": \"Manhwa\"}]' "
+                "OR tags @> '[{\"name\": \"Webtoon\"}]' "
+                "OR tags @> '[{\"name\": \"Korean\"}]' "
                 "OR genres @> ARRAY['Manhwa'] "
                 "OR site_url ILIKE '%manhwa%' "
-                "OR tags::text ILIKE '%Manhua%' "
-                "OR tags::text ILIKE '%Chinese%' "
-                "OR tags::text ILIKE '%Ancient China%' "
+                "OR tags @> '[{\"name\": \"Manhua\"}]' "
+                "OR tags @> '[{\"name\": \"Chinese\"}]' "
+                "OR tags @> '[{\"name\": \"Ancient China\"}]' "
                 "OR genres @> ARRAY['Manhua'] "
                 "OR site_url ILIKE '%manhua%' "
-                "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]') AND (tags::text ILIKE '%Long Strip%' OR tags::text ILIKE '%Full Color%'))"
+                "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]') AND (tags @> '[{\"name\": \"Long Strip\"}]' OR tags @> '[{\"name\": \"Full Color\"}]'))"
                 ")"
             )
     if not fmt_conditions:
@@ -177,7 +177,7 @@ async def find_matched_title(
 
     # 1. Exact title match (case-insensitive)
     res = await session.execute(text("""
-        SELECT id, title_english, title_romaji, embedding::text, popularity
+        SELECT id, title_english, title_romaji, embedding::real[], popularity
         FROM manga
         WHERE (LOWER(title_english) = :q OR LOWER(title_romaji) = :q)
           AND embedding IS NOT NULL
@@ -187,8 +187,7 @@ async def find_matched_title(
     exact = res.fetchone()
     if exact:
         try:
-            emb = json.loads(exact[3])
-            return exact[0], exact[1] or exact[2], emb, 1.0
+            return exact[0], exact[1] or exact[2], exact[3], 1.0
         except Exception:
             pass
 
@@ -196,7 +195,7 @@ async def find_matched_title(
     await session.execute(text("SET pg_trgm.word_similarity_threshold = 0.40;"))
     await session.execute(text("SET pg_trgm.similarity_threshold = 0.30;"))
     res = await session.execute(text("""
-        SELECT id, title_english, title_romaji, embedding::text, popularity,
+        SELECT id, title_english, title_romaji, embedding::real[], popularity,
                GREATEST(similarity(:q, LOWER(COALESCE(title_english, ''))), similarity(:q, LOWER(COALESCE(title_romaji, '')))) as sim,
                GREATEST(word_similarity(:q, LOWER(COALESCE(title_english, ''))), word_similarity(:q, LOWER(COALESCE(title_romaji, '')))) as w_sim,
                (
@@ -212,10 +211,9 @@ async def find_matched_title(
     """), {'q': clean_q})
     row = res.fetchone()
     if row:
-        mid, t_en, t_ro, emb_str, pop, sim, w_sim, score = row
+        mid, t_en, t_ro, emb, pop, sim, w_sim, score = row
         if score >= 0.48 or sim >= 0.40 or w_sim >= 0.65:
             try:
-                emb = json.loads(emb_str)
                 return mid, t_en or t_ro, emb, float(score)
             except Exception:
                 pass
