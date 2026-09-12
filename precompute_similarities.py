@@ -12,15 +12,17 @@ from app.services.retrieval import retrieve_similar_manga
 
 async def precompute_similarities():
     async with AsyncSessionLocal() as session:
-        # Get all mangas with embeddings
-        stmt = select(Manga).where(Manga.embedding.isnot(None))
-        result = await session.execute(stmt)
-        mangas = result.scalars().all()
+        # Get all mangas with embeddings using yield_per to stream results and prevent OOM
+        stmt = select(Manga).where(Manga.embedding.isnot(None)).execution_options(yield_per=100)
+        result = await session.stream(stmt)
         
-        total = len(mangas)
-        print(f"Precomputing similarities for {total} mangas...")
+        # We can't easily get the total count when streaming without a separate COUNT query, 
+        # so we'll just track the progress index.
+        print("Precomputing similarities in chunks (streaming)...")
         
-        for i, manga in enumerate(mangas):
+        i = 0
+        async for manga in result.scalars():
+            i += 1
             if manga.similar_mangas is not None:
                 continue # Skip if already computed
                 
@@ -45,9 +47,9 @@ async def precompute_similarities():
             manga.similar_mangas = similar_list
             session.add(manga)
             
-            if (i + 1) % 100 == 0:
+            if i % 100 == 0:
                 await session.commit()
-                print(f"Processed {i + 1}/{total} mangas.")
+                print(f"Processed {i} mangas.")
                 
         await session.commit()
         print("Done precomputing similarities.")

@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useMemo } from 'react';
+import { List } from 'react-window';
 import MangaCard from './MangaCard';
 import SectionDivider from './SectionDivider';
 
@@ -82,47 +83,6 @@ export default function MangaGrid({
   const estimatedRowHeight = activeGridSize === 'compact' ? 360 : activeGridSize === 'large' ? 520 : 450;
   const totalRows = Math.ceil(sortedMangas.length / columns);
 
-  // Dual-Direction Overscan Buffer: 4 rows above & 4 rows below (~1600-2000px buffer)
-  const OVERSCAN_ROWS = 4;
-  const [rowRange, setRowRange] = useState({ start: 0, end: 12 });
-  const rowRangeRef = useRef(rowRange);
-  rowRangeRef.current = rowRange;
-
-  // Ultra-Smooth Window Scroll Listener: Only triggers re-render when row boundaries cross!
-  useEffect(() => {
-    if (!shouldVirtualize) return;
-
-    let rAFId = null;
-    const calculateRange = () => {
-      const scrollY = window.scrollY || document.documentElement.scrollTop;
-      const gridTop = gridRef.current ? gridRef.current.offsetTop : 300;
-      const relativeScroll = Math.max(0, scrollY - gridTop);
-      const vH = window.innerHeight || 800;
-
-      const newStart = Math.max(0, Math.floor(relativeScroll / estimatedRowHeight) - OVERSCAN_ROWS);
-      const newEnd = Math.min(totalRows, Math.ceil((relativeScroll + vH) / estimatedRowHeight) + OVERSCAN_ROWS);
-
-      const curr = rowRangeRef.current;
-      if (newStart !== curr.start || newEnd !== curr.end) {
-        rowRangeRef.current = { start: newStart, end: newEnd };
-        setRowRange({ start: newStart, end: newEnd });
-      }
-    };
-
-    const handleScroll = () => {
-      if (rAFId) cancelAnimationFrame(rAFId);
-      rAFId = requestAnimationFrame(calculateRange);
-    };
-
-    window.addEventListener('scroll', handleScroll, { passive: true });
-    calculateRange();
-
-    return () => {
-      window.removeEventListener('scroll', handleScroll);
-      if (rAFId) cancelAnimationFrame(rAFId);
-    };
-  }, [shouldVirtualize, totalRows, estimatedRowHeight]);
-
   // Feature 149: Infinite Scroll with Load-More Sentinel
   const sentinelRef = useRef(null);
   const loadingRef = useRef(loading);
@@ -185,25 +145,39 @@ export default function MangaGrid({
     );
   }
 
-  const startRow = shouldVirtualize ? Math.min(rowRange.start, totalRows) : 0;
-  const endRow = shouldVirtualize ? Math.min(rowRange.end, totalRows) : totalRows;
-  const paddingTop = shouldVirtualize ? startRow * estimatedRowHeight : 0;
-  const paddingBottom = shouldVirtualize ? Math.max(0, (totalRows - endRow) * estimatedRowHeight) : 0;
-
-  // Memoized visible rows slice - never recalculates during smooth scrolling within range
-  const visibleRows = shouldVirtualize ? (() => {
-    const slices = [];
-    for (let r = startRow; r < endRow; r++) {
-      slices.push({
-        rowIndex: r,
-        items: sortedMangas.slice(r * columns, (r + 1) * columns)
-      });
-    }
-    return slices;
-  })() : null;
+  // Feature 74: Virtualized Grid Render Container using react-window
+  const Row = ({ index, style }) => {
+    const items = sortedMangas.slice(index * columns, (index + 1) * columns);
+    return (
+      <div style={{ ...style, display: 'flex', alignItems: 'flex-start' }} className="pb-6">
+        <div className={`w-full grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
+          {items.map((m, colIdx) => {
+            const globalIdx = index * columns + colIdx;
+            return (
+              <div key={m.id || globalIdx} className="relative transform-gpu will-change-transform h-full">
+                <MangaCard
+                  manga={m}
+                  onClick={onCardClick}
+                  isBookmarked={isBookmarked(m.id)}
+                  onToggleBookmark={onToggleBookmark}
+                  gridSize={activeGridSize}
+                  stampStyle={stampStyle}
+                  hoverAccent={hoverAccent}
+                  nsfwBlur={nsfwBlur}
+                  onSelectAuthor={onSelectAuthor}
+                  showMatchPct={showMatchPct}
+                  rank={showRank ? (globalIdx + 1) : null}
+                />
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
 
   return (
-    <div ref={gridRef} className="space-y-6">
+    <div ref={gridRef} className="space-y-6 w-full">
 
       {/* Top Header Bar with Count & Feature 16: Quick Sort Dropdown */}
       {!hideDivider && (
@@ -215,7 +189,7 @@ export default function MangaGrid({
             </span>
             {shouldVirtualize && (
               <span className="text-[10px] bg-[var(--surface-color)] border border-[var(--border-color)] text-[var(--accent-emerald)] px-2 py-0.5 rounded-full font-mono">
-                ⚡ 60fps Windowing ({endRow - startRow} rows active)
+                ⚡ 60fps Windowing (react-window)
               </span>
             )}
           </div>
@@ -249,39 +223,15 @@ export default function MangaGrid({
         </div>
       )}
 
-      {/* Feature 74: Virtualized Grid Render Container */}
-      {shouldVirtualize && visibleRows ? (
-        <div style={{ paddingTop: `${paddingTop}px`, paddingBottom: `${paddingBottom}px` }}>
-          <div className="space-y-6">
-            {visibleRows.map(({ rowIndex, items }) => (
-              <div key={rowIndex} className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
-                {items.map((m, colIdx) => {
-                  const globalIdx = rowIndex * columns + colIdx;
-                  return (
-                    <div 
-                      key={m.id || globalIdx} 
-                      className="relative transform-gpu will-change-transform"
-                    >
-                      <MangaCard
-                        manga={m}
-                        onClick={onCardClick}
-                        isBookmarked={isBookmarked(m.id)}
-                        onToggleBookmark={onToggleBookmark}
-                        gridSize={activeGridSize}
-                        stampStyle={stampStyle}
-                        hoverAccent={hoverAccent}
-                        nsfwBlur={nsfwBlur}
-                        onSelectAuthor={onSelectAuthor}
-                        showMatchPct={showMatchPct}
-                        rank={showRank ? (globalIdx + 1) : null}
-                      />
-                    </div>
-                  );
-                })}
-              </div>
-            ))}
-          </div>
-        </div>
+      {shouldVirtualize ? (
+        <List
+          style={{ height: viewportHeight || 800, width: '100%' }}
+          rowCount={totalRows}
+          rowHeight={estimatedRowHeight}
+          rowComponent={Row}
+          overscanCount={2}
+          className="no-scrollbar"
+        />
       ) : (
         /* Standard Un-virtualized Grid Display for smaller item sets */
         <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>

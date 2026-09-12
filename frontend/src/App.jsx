@@ -3,9 +3,9 @@ import Header from './components/Header';
 import SearchBar from './components/SearchBar';
 import ComparisonSearch from './components/ComparisonSearch';
 import MangaGrid from './components/MangaGrid';
-import BookmarksView from './components/BookmarksView';
+const BookmarksView = lazy(() => import('./components/BookmarksView'));
+const SurpriseView = lazy(() => import('./components/SurpriseView'));
 import HeroBanner from './components/HeroBanner';
-import SurpriseView from './components/SurpriseView';
 import BackToTop from './components/BackToTop';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
@@ -572,19 +572,21 @@ export default function App() {
         {/* SURPRISE ME TAB VIEW */}
         {activeTab === 'surprise' && (
           <>
-            <SurpriseView
-              key={surpriseKey}
-              manga={surpriseManga}
-              loading={loadingSurprise}
-              onRefresh={handleSurpriseMe}
-              fetchBatch={fetchRouletteBatch}
-              filters={filters}
-              onOpenFilter={() => setIsFilterOpen(true)}
-              bookmarks={bookmarks}
-              onToggleBookmark={handleToggleBookmark}
-              onSelectManga={setSelectedManga}
-              imageLength={settings.surpriseImageLength || 60}
-            />
+            <Suspense fallback={null}>
+              <SurpriseView
+                key={surpriseKey}
+                manga={surpriseManga}
+                loading={loadingSurprise}
+                onRefresh={handleSurpriseMe}
+                fetchBatch={fetchRouletteBatch}
+                filters={filters}
+                onOpenFilter={() => setIsFilterOpen(true)}
+                bookmarks={bookmarks}
+                onToggleBookmark={handleToggleBookmark}
+                onSelectManga={setSelectedManga}
+                imageLength={settings.surpriseImageLength || 60}
+              />
+            </Suspense>
 
             {/* Universal DRY Filter Drawer in Surprise Me */}
             {isFilterOpen && (
@@ -614,14 +616,16 @@ export default function App() {
         {/* BOOKMARKS TAB VIEW */}
         {activeTab === 'bookmarks' && (
           <div className="pt-4 pb-20">
-            <BookmarksView
-              bookmarks={bookmarks}
-              onSelectManga={setSelectedManga}
-              onToggleBookmark={handleToggleBookmark}
-              onClearAll={() => setBookmarks([])}
-              gridSize={settings.gridSize || 'standard'}
-              hoverAccent={settings.hoverAccent || 'vermillion'}
-            />
+            <Suspense fallback={null}>
+              <BookmarksView
+                bookmarks={bookmarks}
+                onSelectManga={setSelectedManga}
+                onToggleBookmark={handleToggleBookmark}
+                onClearAll={() => setBookmarks([])}
+                gridSize={settings.gridSize || 'standard'}
+                hoverAccent={settings.hoverAccent || 'vermillion'}
+              />
+            </Suspense>
           </div>
         )}
 
