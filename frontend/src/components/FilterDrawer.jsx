@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useRef } from 'react';
 
 export const FILTER_CATEGORIES = [
   {
@@ -42,70 +42,262 @@ export const FILTER_CATEGORIES = [
 
 const ALL_FILTER_OPTIONS = Array.from(new Set(FILTER_CATEGORIES.flatMap(c => c.options)));
 
-function DualRangeSliderPanel({ title, minVal, maxVal, absoluteMin, absoluteMax, step = 1, ticks, onChangeMin, onChangeMax, minLabel = "Min", maxLabel = "Max" }) {
+/**
+ * Single Range Slider for Chapters:
+ * Fixed on the left side (minimum = 1) and changeable only from the right side.
+ * Uses the exact same grab/grabbing hand cursor and pointer interaction as Publication Year.
+ */
+function SingleRangeSliderPanel({ title, val, absoluteMin = 1, absoluteMax = 500, step = 5, ticks, onChange }) {
+  const currentVal = Math.min(absoluteMax, Math.max(absoluteMin, val));
+  const percent = Math.max(0, Math.min(100, ((currentVal - absoluteMin) / (absoluteMax - absoluteMin)) * 100));
+
+  const trackRef = useRef(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  const getValueFromX = (clientX) => {
+    if (!trackRef.current) return absoluteMin;
+    const rect = trackRef.current.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const raw = absoluteMin + pct * (absoluteMax - absoluteMin);
+    const stepped = Math.round(raw / step) * step;
+    return Math.max(absoluteMin, Math.min(absoluteMax, stepped));
+  };
+
+  const handleTrackClick = (e) => {
+    if (e.target.dataset?.handle) return;
+    const clickedVal = getValueFromX(e.clientX);
+    onChange(clickedVal);
+  };
+
+  const handlePointerDown = (e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setIsDragging(true);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (e) => {
+    if (!isDragging) return;
+    const nextVal = getValueFromX(e.clientX);
+    onChange(nextVal);
+  };
+
+  const handlePointerUp = (e) => {
+    setIsDragging(false);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+  };
+
+  return (
+    <div className="bg-[var(--bg-color)]/60 border border-[var(--border-color)] rounded-xl p-2.5 space-y-2 shadow-xs select-none">
+      {/* Header */}
+      <div className="flex items-center justify-between text-[10px] font-mono font-bold tracking-wider text-[var(--text-color)] uppercase">
+        <span>{title}</span>
+        <span className="text-[var(--accent-vermillion)] font-mono text-[9px] font-bold">
+          {currentVal >= absoluteMax ? 'Any' : `1 - ${currentVal}`}
+        </span>
+      </div>
+
+      {/* Track & Slider */}
+      <div className="space-y-1">
+        <div 
+          ref={trackRef}
+          onClick={handleTrackClick}
+          className="relative w-full h-2 bg-[var(--surface-color)] border border-[var(--border-color)] rounded-full cursor-pointer flex items-center"
+        >
+          {/* Active Accent Fill Fixed from Left (0%) */}
+          <div 
+            className="absolute top-0 bottom-0 left-0 bg-[var(--accent-vermillion)] rounded-full pointer-events-none"
+            style={{ width: `${percent}%` }}
+          />
+
+          {/* Right Handle (Changeable) - Exact same grab hand hover as publication year */}
+          <div 
+            data-handle="max"
+            role="slider"
+            tabIndex={0}
+            aria-label="Maximum Chapters"
+            aria-valuenow={currentVal}
+            aria-valuemin={absoluteMin}
+            aria-valuemax={absoluteMax}
+            onPointerDown={handlePointerDown}
+            onPointerMove={handlePointerMove}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                onChange(Math.max(absoluteMin, currentVal - step));
+              } else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                onChange(Math.min(absoluteMax, currentVal + step));
+              }
+            }}
+            className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-[var(--bg-color)] border-2 border-[var(--accent-vermillion)] shadow-sm cursor-grab active:cursor-grabbing transition-transform ${
+              isDragging ? 'scale-125 ring-2 ring-[var(--accent-vermillion)]/40 z-40' : 'hover:scale-110 z-30'
+            }`}
+            style={{ left: `${percent}%`, touchAction: 'none' }}
+          />
+        </div>
+
+        {/* Tick Markers */}
+        <div className="relative w-full flex justify-between px-0.5 pt-0.5 pointer-events-none">
+          {ticks.map((t, idx) => (
+            <div key={idx} className="flex flex-col items-center">
+              <div className="w-0.5 h-1 bg-[var(--border-color)] mb-0.5" />
+              <span className="text-[8px] font-mono text-[var(--text-muted)]">{t.label}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Bidirectional Dual Range Slider for Publication Year:
+ * Both the minimum handle (left) and maximum handle (right) can be dragged and adjusted freely.
+ */
+function DualRangeSliderPanel({ title, minVal, maxVal, absoluteMin, absoluteMax, step = 1, ticks, onChangeMin, onChangeMax }) {
+  const trackRef = useRef(null);
+  const [activeHandle, setActiveHandle] = useState(null);
+
   const minPercent = Math.max(0, Math.min(100, ((minVal - absoluteMin) / (absoluteMax - absoluteMin)) * 100));
   const maxPercent = Math.max(0, Math.min(100, ((maxVal - absoluteMin) / (absoluteMax - absoluteMin)) * 100));
 
+  const getValueFromX = (clientX) => {
+    if (!trackRef.current) return absoluteMin;
+    const rect = trackRef.current.getBoundingClientRect();
+    const pct = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    const raw = absoluteMin + pct * (absoluteMax - absoluteMin);
+    const stepped = Math.round(raw / step) * step;
+    return Math.max(absoluteMin, Math.min(absoluteMax, stepped));
+  };
+
+  const handleTrackClick = (e) => {
+    if (e.target.dataset?.handle) return;
+    const clickedVal = getValueFromX(e.clientX);
+    const distToMin = Math.abs(clickedVal - minVal);
+    const distToMax = Math.abs(clickedVal - maxVal);
+
+    if (distToMin <= distToMax) {
+      const nextMin = Math.min(clickedVal, maxVal - step);
+      onChangeMin(nextMin);
+    } else {
+      const nextMax = Math.max(clickedVal, minVal + step);
+      onChangeMax(nextMax);
+    }
+  };
+
+  const handlePointerDown = (handle, e) => {
+    e.stopPropagation();
+    e.preventDefault();
+    setActiveHandle(handle);
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+
+  const handlePointerMove = (handle, e) => {
+    if (activeHandle !== handle) return;
+    const val = getValueFromX(e.clientX);
+    if (handle === 'min') {
+      onChangeMin(Math.min(val, maxVal - step));
+    } else {
+      onChangeMax(Math.max(val, minVal + step));
+    }
+  };
+
+  const handlePointerUp = (e) => {
+    setActiveHandle(null);
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch (_) {}
+  };
+
   return (
-    <div className="bg-[var(--bg-color)]/60 border border-[var(--border-color)] rounded-xl p-2.5 space-y-2 shadow-xs">
-      {/* Compact Header */}
+    <div className="bg-[var(--bg-color)]/60 border border-[var(--border-color)] rounded-xl p-2.5 space-y-2 shadow-xs select-none">
+      {/* Header */}
       <div className="flex items-center justify-between text-[10px] font-mono font-bold tracking-wider text-[var(--text-color)] uppercase">
         <span>{title}</span>
         <span className="text-[var(--accent-vermillion)] font-mono text-[9px] font-bold">
           {minVal <= absoluteMin && maxVal >= absoluteMax 
             ? 'Any' 
-            : `${minVal} - ${maxVal >= absoluteMax ? absoluteMax + '+' : maxVal}`}
+            : `${minVal} - ${maxVal >= absoluteMax ? absoluteMax : maxVal}`}
         </span>
       </div>
 
       {/* Dual Slider Track */}
       <div className="space-y-1">
-        <div className="relative w-full h-1.5 bg-[var(--surface-color)] border border-[var(--border-color)] rounded-full">
+        <div 
+          ref={trackRef}
+          onClick={handleTrackClick}
+          className="relative w-full h-2 bg-[var(--surface-color)] border border-[var(--border-color)] rounded-full cursor-pointer flex items-center"
+        >
           {/* Active Dynamic Accent Track Fill */}
           <div 
-            className="absolute top-0 bottom-0 bg-[var(--accent-vermillion)] rounded-full"
+            className="absolute top-0 bottom-0 bg-[var(--accent-vermillion)] rounded-full pointer-events-none"
             style={{ left: `${minPercent}%`, right: `${100 - maxPercent}%` }}
           />
 
-          {/* Dual Range Inputs */}
-          <input
-            type="range"
-            min={absoluteMin}
-            max={absoluteMax}
-            step={step}
-            value={minVal}
-            onChange={(e) => {
-              const val = Math.min(Number(e.target.value), maxVal - step);
-              onChangeMin(val);
+          {/* Left Handle (Min Year) - Fully Bidirectional */}
+          <div 
+            data-handle="min"
+            role="slider"
+            tabIndex={0}
+            aria-label="Minimum Publication Year"
+            aria-valuenow={minVal}
+            aria-valuemin={absoluteMin}
+            aria-valuemax={maxVal - step}
+            onPointerDown={(e) => handlePointerDown('min', e)}
+            onPointerMove={(e) => handlePointerMove('min', e)}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                onChangeMin(Math.max(absoluteMin, minVal - step));
+              } else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                onChangeMin(Math.min(maxVal - step, minVal + step));
+              }
             }}
-            className="absolute top-1/2 -translate-y-1/2 w-full h-1.5 opacity-0 cursor-pointer z-30"
-          />
-          <input
-            type="range"
-            min={absoluteMin}
-            max={absoluteMax}
-            step={step}
-            value={maxVal}
-            onChange={(e) => {
-              const val = Math.max(Number(e.target.value), minVal + step);
-              onChangeMax(val);
-            }}
-            className="absolute top-1/2 -translate-y-1/2 w-full h-1.5 opacity-0 cursor-pointer z-30"
+            className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-[var(--bg-color)] border-2 border-[var(--accent-vermillion)] shadow-sm cursor-grab active:cursor-grabbing transition-transform ${
+              activeHandle === 'min' ? 'scale-125 ring-2 ring-[var(--accent-vermillion)]/40 z-40' : 'hover:scale-110 z-30'
+            }`}
+            style={{ left: `${minPercent}%`, touchAction: 'none' }}
           />
 
-          {/* Visual Handles */}
+          {/* Right Handle (Max Year) - Fully Bidirectional */}
           <div 
-            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-[var(--bg-color)] border-2 border-[var(--accent-vermillion)] shadow-xs pointer-events-none z-20"
-            style={{ left: `${minPercent}%` }}
-          />
-          <div 
-            className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3 h-3 rounded-full bg-[var(--bg-color)] border-2 border-[var(--accent-vermillion)] shadow-xs pointer-events-none z-20"
-            style={{ left: `${maxPercent}%` }}
+            data-handle="max"
+            role="slider"
+            tabIndex={0}
+            aria-label="Maximum Publication Year"
+            aria-valuenow={maxVal}
+            aria-valuemin={minVal + step}
+            aria-valuemax={absoluteMax}
+            onPointerDown={(e) => handlePointerDown('max', e)}
+            onPointerMove={(e) => handlePointerMove('max', e)}
+            onPointerUp={handlePointerUp}
+            onPointerCancel={handlePointerUp}
+            onKeyDown={(e) => {
+              if (e.key === 'ArrowLeft' || e.key === 'ArrowDown') {
+                e.preventDefault();
+                onChangeMax(Math.max(minVal + step, maxVal - step));
+              } else if (e.key === 'ArrowRight' || e.key === 'ArrowUp') {
+                e.preventDefault();
+                onChangeMax(Math.min(absoluteMax, maxVal + step));
+              }
+            }}
+            className={`absolute top-1/2 -translate-y-1/2 -translate-x-1/2 w-3.5 h-3.5 rounded-full bg-[var(--bg-color)] border-2 border-[var(--accent-vermillion)] shadow-sm cursor-grab active:cursor-grabbing transition-transform ${
+              activeHandle === 'max' ? 'scale-125 ring-2 ring-[var(--accent-vermillion)]/40 z-40' : 'hover:scale-110 z-30'
+            }`}
+            style={{ left: `${maxPercent}%`, touchAction: 'none' }}
           />
         </div>
 
         {/* Tick Markers */}
-        <div className="relative w-full flex justify-between px-0.5 pt-0.5">
+        <div className="relative w-full flex justify-between px-0.5 pt-0.5 pointer-events-none">
           {ticks.map((t, idx) => (
             <div key={idx} className="flex flex-col items-center">
               <div className="w-0.5 h-1 bg-[var(--border-color)] mb-0.5" />
@@ -259,11 +451,10 @@ export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onR
           </div>
         </div>
 
-        {/* Col 2: Chapter Ranges */}
-        <DualRangeSliderPanel
+        {/* Col 2: Chapter Ranges (Fixed left side at 1, changeable from right side) */}
+        <SingleRangeSliderPanel
           title="CHAPTER RANGES"
-          minVal={filters.min_chapters || 1}
-          maxVal={filters.max_chapters || 500}
+          val={filters.max_chapters || 500}
           absoluteMin={1}
           absoluteMax={500}
           step={5}
@@ -274,8 +465,11 @@ export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onR
             { val: 250, label: '250' },
             { val: 500, label: '500+' }
           ]}
-          onChangeMin={(val) => setFilters(prev => ({ ...prev, min_chapters: val <= 1 ? null : val }))}
-          onChangeMax={(val) => setFilters(prev => ({ ...prev, max_chapters: val >= 500 ? null : val }))}
+          onChange={(val) => setFilters(prev => ({
+            ...prev,
+            min_chapters: null,
+            max_chapters: val >= 500 ? null : val
+          }))}
         />
 
         {/* Col 3: Publication Year Ranges */}

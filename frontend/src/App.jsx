@@ -304,6 +304,7 @@ export default function App() {
     filters.max_year ||
     filters.min_score > 0 ||
     filters.min_chapters ||
+    filters.max_chapters ||
     filters.min_match_pct > 0 ||
     (filters.genres && filters.genres.length > 0) ||
     (filters.exclude_genres && filters.exclude_genres.length > 0) ||
@@ -315,7 +316,7 @@ export default function App() {
     filters.min_year ? 1 : 0,
     filters.max_year ? 1 : 0,
     filters.min_score > 0 ? 1 : 0,
-    filters.min_chapters ? 1 : 0,
+    (filters.min_chapters || filters.max_chapters) ? 1 : 0,
     filters.min_match_pct > 0 ? 1 : 0,
     (filters.genres && filters.genres.length > 0) ? filters.genres.length : 0,
     (filters.exclude_genres && filters.exclude_genres.length > 0) ? filters.exclude_genres.length : 0,
@@ -580,6 +581,7 @@ export default function App() {
                 onRefresh={handleSurpriseMe}
                 fetchBatch={fetchRouletteBatch}
                 filters={filters}
+                isFilterOpen={isFilterOpen}
                 onOpenFilter={() => setIsFilterOpen(true)}
                 bookmarks={bookmarks}
                 onToggleBookmark={handleToggleBookmark}
