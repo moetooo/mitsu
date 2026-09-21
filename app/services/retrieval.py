@@ -164,13 +164,15 @@ def infer_format_type(
 
 async def find_matched_title(
     session: AsyncSession,
-    query: str
+    query: Optional[str] = None
 ) -> Optional[Tuple[int, str, List[float], float]]:
     """
     Identifies if a search query targets a specific manga title (including typos/misspellings)
     using exact matching, prefix matching, and trigram/word similarity via pg_trgm GIN indexes.
     Returns (manga_id, matched_title, embedding_list, match_score) or None.
     """
+    if not query or not query.strip():
+        return None
     clean_q = query.strip().lower()
     if len(clean_q) < 3:
         return None
@@ -274,9 +276,8 @@ async def retrieve_similar_manga(
 
     where_str = " AND ".join(where_clauses)
 
-    has_query_text = bool(query_text and query_text.strip())
-    if has_query_text:
-        clean_q = query_text.strip().lower()
+    clean_q = query_text.strip().lower() if (query_text and query_text.strip()) else None
+    if clean_q:
         params["clean_q"] = clean_q
         params["prefix_q"] = f"{clean_q}%"
         params["contain_q"] = f"%{clean_q}%"
@@ -307,7 +308,7 @@ async def retrieve_similar_manga(
         """
 
     relevance_conditions = []
-    if has_query_text:
+    if clean_q:
         relevance_conditions.append("(title_boost > 0 OR sim >= 0.44)")
     if filters and filters.min_match_pct and filters.min_match_pct > 0:
         params["min_pct"] = float(filters.min_match_pct)
