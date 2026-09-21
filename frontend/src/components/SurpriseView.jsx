@@ -59,6 +59,7 @@ export default function SurpriseView({
   onRefresh, 
   fetchBatch,
   filters = {},
+  isFilterOpen = false,
   onOpenFilter,
   bookmarks = [], 
   onToggleBookmark, 
@@ -152,6 +153,11 @@ export default function SurpriseView({
     }
   }, [currentIndex, titles]);
 
+  const onRefreshRef = useRef(onRefresh);
+  useEffect(() => {
+    onRefreshRef.current = onRefresh;
+  }, [onRefresh]);
+
   // Sync initial manga prop if queue is empty
   useEffect(() => {
     if (manga && titles.length === 0) {
@@ -159,6 +165,18 @@ export default function SurpriseView({
       seenIdsRef.current.add(manga.id);
     }
   }, [manga, titles.length]);
+
+  // Fallback: If queue is empty and not actively loading, trigger fetch
+  useEffect(() => {
+    if (titles.length === 0 && !loading && onRefreshRef.current) {
+      onRefreshRef.current().then(first => {
+        if (first) {
+          setTitles([first]);
+          seenIdsRef.current.add(first.id);
+        }
+      });
+    }
+  }, [titles.length, loading]);
 
   // Refill background buffer whenever remaining titles drop below 4
   const refillQueue = useCallback(async () => {
@@ -202,22 +220,40 @@ export default function SurpriseView({
     }
   }, [currentIndex, titles.length, refillQueue]);
 
-  // Reset queue if filters change
+  const prevFiltersRef = useRef(JSON.stringify(filters));
+  const isFirstMountRef = useRef(true);
+
+  // Reset queue if filters change (only after initial mount, and debounced)
   useEffect(() => {
-    seenIdsRef.current.clear();
-    setTitles([]);
-    setCurrentIndex(0);
-    setIsSliding(false);
-    setIsDetailsOpen(false);
-    resetIdleHintTimer();
-    if (onRefresh) {
-      onRefresh().then(first => {
-        if (first) {
-          setTitles([first]);
-          seenIdsRef.current.add(first.id);
-        }
-      });
+    if (isFirstMountRef.current) {
+      isFirstMountRef.current = false;
+      return;
     }
+
+    const currentFiltersStr = JSON.stringify(filters);
+    if (prevFiltersRef.current === currentFiltersStr) {
+      return;
+    }
+    prevFiltersRef.current = currentFiltersStr;
+
+    const timer = setTimeout(() => {
+      seenIdsRef.current.clear();
+      setIsSliding(false);
+      setIsDetailsOpen(false);
+      resetIdleHintTimer();
+
+      if (onRefreshRef.current) {
+        onRefreshRef.current().then(first => {
+          if (first) {
+            setTitles([first]);
+            setCurrentIndex(0);
+            seenIdsRef.current.add(first.id);
+          }
+        });
+      }
+    }, 400);
+
+    return () => clearTimeout(timer);
   }, [filters, resetIdleHintTimer]);
 
   // Navigation handlers (Vertical physical slide)
@@ -393,7 +429,12 @@ export default function SurpriseView({
     includedCount > 0 || 
     Boolean(filters.format_type) || 
     (filters.min_score > 0) || 
-    (filters.status?.length > 0)
+    (filters.status?.length > 0) ||
+    Boolean(filters.min_year) ||
+    Boolean(filters.max_year) ||
+    Boolean(filters.min_chapters) ||
+    Boolean(filters.max_chapters) ||
+    (filters.min_match_pct > 0)
   );
 
   // Renders the Companion Dossier Card Content (Shared between desktop folio & mobile sheet)
@@ -655,7 +696,7 @@ export default function SurpriseView({
   const translateY = -(currentIndex * (cardSize.height + gap));
 
   // Empty or Loading state with aesthetic pulse
-  if (titles.length === 0 || loading) {
+  if (titles.length === 0 || (loading && titles.length === 0)) {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center space-y-3 bg-transparent select-none animate-in fade-in duration-200">
         <div className="w-9 h-9 rounded-xl bg-[var(--surface-color)] border border-[var(--border-color)] flex items-center justify-center text-[var(--accent-vermillion)] font-bold text-base shadow-md animate-pulse">
@@ -809,24 +850,26 @@ export default function SurpriseView({
       )}
 
       {/* 4. CIRCULAR FILTER BUTTON FLOATING IN BOTTOM-RIGHT CORNER */}
-      <button 
-        type="button"
-        onClick={onOpenFilter}
-        aria-label="Discovery Filters"
-        title="Discovery Filters"
-        className={`fixed bottom-6 right-6 w-12 h-12 rounded-full bg-[var(--surface-color)]/95 backdrop-blur-xl border flex items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.5)] transition-all cursor-pointer z-40 pointer-events-auto ${
-          hasActiveFilters 
-            ? 'border-[var(--accent-vermillion)] text-[var(--accent-vermillion)] scale-105 shadow-[0_0_15px_rgba(230,57,70,0.3)]' 
-            : 'border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-[var(--text-color)] hover:text-[var(--accent-vermillion)] hover:scale-110 active:scale-95'
-        }`}
-      >
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
-        </svg>
-        {hasActiveFilters && (
-          <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-[var(--accent-vermillion)] border-2 border-[var(--bg-color)]" />
-        )}
-      </button>
+      {!isFilterOpen && (
+        <button 
+          type="button"
+          onClick={onOpenFilter}
+          aria-label="Discovery Filters"
+          title="Discovery Filters"
+          className={`fixed bottom-6 right-6 w-12 h-12 rounded-full bg-[var(--surface-color)]/95 backdrop-blur-xl border flex items-center justify-center shadow-[0_10px_30px_rgba(0,0,0,0.5)] transition-all cursor-pointer z-40 pointer-events-auto ${
+            hasActiveFilters 
+              ? 'border-[var(--accent-vermillion)] text-[var(--accent-vermillion)] scale-105 shadow-[0_0_15px_rgba(230,57,70,0.3)]' 
+              : 'border-[var(--border-color)] hover:border-[var(--accent-vermillion)] text-[var(--text-color)] hover:text-[var(--accent-vermillion)] hover:scale-110 active:scale-95'
+          }`}
+        >
+          <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 6V4m0 2a2 2 0 100 4m0-4a2 2 0 110 4m-6 8a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4m6 6v10m6-2a2 2 0 100-4m0 4a2 2 0 110-4m0 4v2m0-6V4" />
+          </svg>
+          {hasActiveFilters && (
+            <span className="absolute -top-1 -right-1 w-3.5 h-3.5 rounded-full bg-[var(--accent-vermillion)] border-2 border-[var(--bg-color)]" />
+          )}
+        </button>
+      )}
 
     </div>
   );
