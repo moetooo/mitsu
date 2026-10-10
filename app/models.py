@@ -48,6 +48,8 @@ class RecommendationResult(BaseModel):
     llm_reasoning: Optional[str] = None
     category_badge: Optional[str] = None
     format_type: Optional[str] = None
+    alternative_titles: Optional[List[str]] = None
+    inferred_tags: Optional[List[Dict[str, Any]]] = None
 
 class RecommendResponse(BaseModel):
     results: List[RecommendationResult]
@@ -66,6 +68,8 @@ class MangaDetail(BaseModel):
     synopsis: Optional[str] = None
     genres: Optional[List[str]] = None
     tags: Optional[List[Dict[str, Any]]] = None
+    alternative_titles: Optional[List[str]] = None
+    inferred_tags: Optional[List[Dict[str, Any]]] = None
     status: Optional[str] = None
     start_year: Optional[int] = None
     chapters: Optional[int] = None
@@ -78,3 +82,4 @@ class MangaDetail(BaseModel):
 
     class Config:
         from_attributes = True
+

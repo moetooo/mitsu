@@ -8,12 +8,21 @@ def strip_html_tags(text: str) -> str:
     return re.sub(clean, '', text)
 
 def anilist_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
+    synonyms = raw.get("synonyms") or []
+    alt_titles = []
+    for s in synonyms:
+        if isinstance(s, str) and s.strip():
+            clean = s.strip()
+            if clean not in alt_titles:
+                alt_titles.append(clean)
+
     return {
         "anilist_id": raw.get("id"),
         "mal_id": raw.get("idMal"),
         "title_romaji": raw.get("title", {}).get("romaji"),
         "title_english": raw.get("title", {}).get("english"),
         "title_native": raw.get("title", {}).get("native"),
+        "alternative_titles": alt_titles,
         "synopsis": strip_html_tags(raw.get("description", "")),
         "genres": raw.get("genres", []),
         "tags": raw.get("tags", []),
@@ -28,34 +37,19 @@ def anilist_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
         "site_url": raw.get("siteUrl")
     }
 
-def jikan_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
-    published_from = raw.get("published", {}).get("from")
-    start_year = int(published_from[:4]) if published_from and len(published_from) >= 4 else None
-    genres = [g.get("name") for g in raw.get("genres", []) if g.get("name")]
-    tags = [{"name": t.get("name"), "rank": 100} for t in raw.get("themes", []) if t.get("name")]
-    
-    return {
-        "mal_id": raw.get("mal_id"),
-        "title_romaji": raw.get("title"),
-        "title_english": raw.get("title_english"),
-        "title_native": raw.get("title_japanese"),
-        "synopsis": strip_html_tags(raw.get("synopsis", "")),
-        "genres": genres,
-        "tags": tags,
-        "status": raw.get("status"),
-        "start_year": start_year,
-        "chapters": raw.get("chapters"),
-        "volumes": raw.get("volumes"),
-        "average_score": int(raw.get("score") * 10) if raw.get("score") else None,
-        "popularity": raw.get("members"),
-        "cover_image_url": raw.get("images", {}).get("jpg", {}).get("large_image_url"),
-        "site_url": raw.get("url")
-    }
-
 def mangadex_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
     attr = raw.get("attributes", {})
     title_dict = attr.get("title", {})
     title_en = title_dict.get("en") or next(iter(title_dict.values()), None)
+    
+    alt_titles = []
+    for item in attr.get("altTitles", []):
+        if isinstance(item, dict):
+            for val in item.values():
+                if isinstance(val, str) and val.strip():
+                    clean = val.strip()
+                    if clean not in alt_titles:
+                        alt_titles.append(clean)
     
     desc_dict = attr.get("description", {})
     synopsis = desc_dict.get("en") or next(iter(desc_dict.values()), "") if desc_dict else ""
@@ -84,6 +78,7 @@ def mangadex_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
         "title_romaji": title_en,
         "title_english": title_en,
         "title_native": None,
+        "alternative_titles": alt_titles,
         "synopsis": strip_html_tags(synopsis),
         "genres": genres,
         "tags": tags,

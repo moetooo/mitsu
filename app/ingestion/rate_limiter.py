@@ -31,7 +31,6 @@ class TokenBucket:
 
 # Shared singleton bucket instances
 anilist_bucket = TokenBucket(rate_per_sec=0.5, burst=2)
-jikan_bucket = TokenBucket(rate_per_sec=0.9, burst=1)
 mangadex_bucket = TokenBucket(rate_per_sec=2, burst=3)
 
 async def fetch_with_retry(bucket: TokenBucket, fetch_fn: Callable[..., Any], *args, max_retries: int = 6, **kwargs):

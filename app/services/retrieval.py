@@ -10,6 +10,122 @@ from typing import List, Optional, Dict, Any, Set, Tuple
 from ..db_models import Manga
 from ..models import RecommendFilters
 from ..services import cache
+from ..config import settings
+from ..enrichment.vocabulary import CANONICAL_VOCABULARY
+
+DEFAULT_CATEGORY_WEIGHTS: Dict[str, float] = {
+    "relationship": 1.00,
+    "trope": 1.00,
+    "theme": 0.90,
+    "setting": 0.80,
+    "genre": 0.60,
+    "demographic": 0.30,
+    "format": 0.15,
+}
+
+def compute_category_aware_tag_alignment(
+    query_tags: Optional[List[Dict[str, Any]]],
+    candidate_tags: Optional[List[Dict[str, Any]]],
+    category_weights: Optional[Dict[str, float]] = None
+) -> float:
+    """
+    Computes normalized category-aware tag alignment between query tags and candidate tags.
+    Formula:
+        tag_alignment = weighted_shared_tags / weighted_query_tags
+    Clamped to [0.0, 1.0].
+    """
+    if not query_tags or not candidate_tags:
+        return 0.0
+
+    weights = category_weights or DEFAULT_CATEGORY_WEIGHTS
+
+    cand_slugs = {
+        t.get("slug") for t in candidate_tags
+        if isinstance(t, dict) and t.get("slug")
+    }
+
+    weighted_shared = 0.0
+    weighted_query = 0.0
+
+    seen_query_slugs = set()
+    for t in query_tags:
+        if not isinstance(t, dict):
+            continue
+        slug = t.get("slug")
+        if not slug or slug in seen_query_slugs:
+            continue
+        seen_query_slugs.add(slug)
+
+        cat = t.get("category")
+        if not cat:
+            tag_def = CANONICAL_VOCABULARY.get(slug)
+            cat = tag_def.category.value if tag_def else "unknown"
+
+        w = weights.get(cat, 0.50)
+        weighted_query += w
+        if slug in cand_slugs:
+            weighted_shared += w
+
+    if weighted_query <= 0.0:
+        return 0.0
+
+    alignment = weighted_shared / weighted_query
+    return max(0.0, min(1.0, alignment))
+
+
+def build_tag_alignment_sql(
+    query_tags: Optional[List[Dict[str, Any]]],
+    category_weights: Optional[Dict[str, float]] = None,
+    tag_boost: Optional[float] = None
+) -> Tuple[str, str, Dict[str, Any]]:
+    """
+    Constructs SQL expressions and parameters for category-aware tag alignment.
+    Returns:
+        tag_select_clause: String to include in SELECT of ranked CTE
+        tag_boost_score_expr: String to add to hybrid_score in scored CTE
+        params: Dict of parameter bindings
+    """
+    weights = category_weights or DEFAULT_CATEGORY_WEIGHTS
+    boost = tag_boost if tag_boost is not None else settings.INFERRED_TAG_BOOST
+
+    if not query_tags:
+        return "0.0 as tag_alignment,", "", {}
+
+    params: Dict[str, Any] = {"tag_boost": float(boost)}
+    weighted_query = 0.0
+    case_terms = []
+
+    seen_slugs = set()
+    for idx, t in enumerate(query_tags):
+        if not isinstance(t, dict):
+            continue
+        slug = t.get("slug")
+        if not slug or slug in seen_slugs:
+            continue
+        seen_slugs.add(slug)
+
+        cat = t.get("category")
+        if not cat:
+            tag_def = CANONICAL_VOCABULARY.get(slug)
+            cat = tag_def.category.value if tag_def else "unknown"
+
+        w = float(weights.get(cat, 0.50))
+        weighted_query += w
+
+        param_key = f"q_tag_{idx}"
+        params[param_key] = json.dumps([{"slug": slug}])
+        case_terms.append(
+            f"(CASE WHEN inferred_tags IS NOT NULL AND inferred_tags @> CAST(:{param_key} AS jsonb) THEN {w} ELSE 0.0 END)"
+        )
+
+    if weighted_query <= 0.0 or not case_terms:
+        return "0.0 as tag_alignment,", "", {}
+
+    sum_terms = " + ".join(case_terms)
+    tag_select = f"LEAST(1.0, GREATEST(0.0, ({sum_terms}) / {weighted_query})) as tag_alignment,"
+    tag_score_add = " + (:tag_boost * tag_alignment)"
+
+    return tag_select, tag_score_add, params
 
 ROULETTE_POOL_TARGET = 50
 ROULETTE_REFILL_THRESHOLD = 15
@@ -22,7 +138,7 @@ def generate_filter_hash(filters: Optional[RecommendFilters]) -> str:
     """Generates a stable MD5 fingerprint hash for a filter set"""
     if not filters:
         return "default"
-    filter_dict = filters.model_dump(exclude_none=True) if hasattr(filters, 'model_dump') else filters.dict(exclude_none=True)
+    filter_dict = filters.model_dump(exclude_none=True)
     filter_str = json.dumps(filter_dict, sort_keys=True)
     return hashlib.md5(filter_str.encode()).hexdigest()[:12]
 
@@ -72,7 +188,8 @@ def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
                 "OR tags @> '[{\"name\": \"Webtoon\"}]' "
                 "OR tags @> '[{\"name\": \"Korean\"}]' "
                 "OR genres @> ARRAY['Manhwa'] "
-                "OR site_url ILIKE '%manhwa%'"
+                "OR site_url ILIKE '%manhwa%' "
+                "OR (inferred_tags IS NOT NULL AND inferred_tags @> '[{\"slug\": \"manhwa\"}]')"
                 ") "
                 "AND NOT ("
                 "tags @> '[{\"name\": \"Manhua\"}]' "
@@ -92,6 +209,7 @@ def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
                 "OR tags @> '[{\"name\": \"Ancient China\"}]' "
                 "OR genres @> ARRAY['Manhua'] "
                 "OR site_url ILIKE '%manhua%' "
+                "OR (inferred_tags IS NOT NULL AND inferred_tags @> '[{\"slug\": \"manhua\"}]') "
                 "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]' OR title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]') AND (tags @> '[{\"name\": \"Long Strip\"}]' OR tags @> '[{\"name\": \"Full Color\"}]'))"
                 ") "
                 "AND NOT ("
@@ -112,11 +230,13 @@ def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
                 "OR tags @> '[{\"name\": \"Korean\"}]' "
                 "OR genres @> ARRAY['Manhwa'] "
                 "OR site_url ILIKE '%manhwa%' "
+                "OR (inferred_tags IS NOT NULL AND inferred_tags @> '[{\"slug\": \"manhwa\"}]') "
                 "OR tags @> '[{\"name\": \"Manhua\"}]' "
                 "OR tags @> '[{\"name\": \"Chinese\"}]' "
                 "OR tags @> '[{\"name\": \"Ancient China\"}]' "
                 "OR genres @> ARRAY['Manhua'] "
                 "OR site_url ILIKE '%manhua%' "
+                "OR (inferred_tags IS NOT NULL AND inferred_tags @> '[{\"slug\": \"manhua\"}]') "
                 "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]') AND (tags @> '[{\"name\": \"Long Strip\"}]' OR tags @> '[{\"name\": \"Full Color\"}]'))"
                 ")"
             )
@@ -128,9 +248,19 @@ def infer_format_type(
     title_native: Optional[str] = None,
     tags: Any = None,
     genres: Optional[List[str]] = None,
-    site_url: Optional[str] = None
+    site_url: Optional[str] = None,
+    inferred_tags: Any = None
 ) -> str:
     """Infers whether a title is MANHWA, MANHUA, or MANGA from metadata."""
+    if inferred_tags and isinstance(inferred_tags, list):
+        inferred_slugs = {t.get("slug") for t in inferred_tags if isinstance(t, dict)}
+        if "manhwa" in inferred_slugs:
+            return "MANHWA"
+        if "manhua" in inferred_slugs:
+            return "MANHUA"
+        if "manga" in inferred_slugs:
+            return "MANGA"
+
     tags_str = str(tags) if tags else ""
     genres_list = genres or []
     site_str = (site_url or "").lower()
@@ -228,7 +358,11 @@ async def retrieve_similar_manga(
     filters: Optional[RecommendFilters] = None,
     limit: int = 20,
     offset: int = 0,
-    query_text: Optional[str] = None
+    query_text: Optional[str] = None,
+    query_inferred_tags: Optional[List[Dict[str, Any]]] = None,
+    enable_inferred_tags: Optional[bool] = None,
+    category_weights: Optional[Dict[str, float]] = None,
+    tag_boost: Optional[float] = None
 ):
     if isinstance(query_embedding, str):
         emb_str = query_embedding
@@ -251,15 +385,15 @@ async def retrieve_similar_manga(
             st_list = ", ".join(f"'{s.replace('\'', '\'\'')}'" for s in filters.status)
             where_clauses.append(f"status IN ({st_list})")
         if filters.min_year:
-            where_clauses.append(f"start_year >= {int(filters.min_year)}")
+            where_clauses.append(f"start_year >= {filters.min_year}")
         if filters.max_year:
-            where_clauses.append(f"start_year <= {int(filters.max_year)}")
+            where_clauses.append(f"start_year <= {filters.max_year}")
         if filters.min_score:
-            where_clauses.append(f"average_score >= {int(filters.min_score)}")
+            where_clauses.append(f"average_score >= {filters.min_score}")
         if filters.min_chapters:
-            where_clauses.append(f"chapters >= {int(filters.min_chapters)}")
+            where_clauses.append(f"chapters >= {filters.min_chapters}")
         if filters.max_chapters:
-            where_clauses.append(f"chapters <= {int(filters.max_chapters)}")
+            where_clauses.append(f"chapters <= {filters.max_chapters}")
         if filters.genres:
             cond = build_genre_sql_condition(filters.genres, exclude=False)
             if cond:
@@ -276,6 +410,17 @@ async def retrieve_similar_manga(
 
     where_str = " AND ".join(where_clauses)
 
+    # Inferred tags category-aware ranking configuration
+    should_rank_tags = enable_inferred_tags if enable_inferred_tags is not None else settings.ENABLE_INFERRED_TAG_RANKING
+    if should_rank_tags and query_inferred_tags:
+        tag_select_sql, tag_boost_sql, tag_params = build_tag_alignment_sql(
+            query_inferred_tags, category_weights, tag_boost
+        )
+        params.update(tag_params)
+    else:
+        tag_select_sql = "0.0 as tag_alignment,"
+        tag_boost_sql = ""
+
     clean_q = query_text.strip().lower() if (query_text and query_text.strip()) else None
     if clean_q:
         params["clean_q"] = clean_q
@@ -289,21 +434,23 @@ async def retrieve_similar_manga(
               ELSE 0.0
             END as title_boost,
         """
-        score_calc = """
+        score_calc = f"""
             (
               0.55 * sim +
               0.30 * title_boost +
               0.08 * (COALESCE(average_score, 50) / 100.0) +
               0.07 * (LOG(GREATEST(COALESCE(popularity, 1), 1)) / 6.0)
+              {tag_boost_sql}
             ) as hybrid_score
         """
     else:
         title_boost_select = "0.0 as title_boost,"
-        score_calc = """
+        score_calc = f"""
             (
               0.70 * sim +
               0.18 * (COALESCE(average_score, 50) / 100.0) +
               0.12 * (LOG(GREATEST(COALESCE(popularity, 1), 1)) / 6.0)
+              {tag_boost_sql}
             ) as hybrid_score
         """
 
@@ -331,6 +478,7 @@ async def retrieve_similar_manga(
             synopsis, 
             genres, 
             tags, 
+            inferred_tags,
             status,
             start_year, 
             chapters,
@@ -342,6 +490,7 @@ async def retrieve_similar_manga(
             site_url,
             (1 - (embedding <=> CAST(:emb AS vector))) as sim,
             {title_boost_select}
+            {tag_select_sql}
             ROW_NUMBER() OVER (
               PARTITION BY LOWER(COALESCE(title_english, title_romaji, id::text)) 
               ORDER BY (1 - (embedding <=> CAST(:emb AS vector))) DESC, popularity DESC NULLS LAST
@@ -378,6 +527,7 @@ async def retrieve_similar_manga(
         m.synopsis = r.synopsis
         m.genres = r.genres
         m.tags = r.tags
+        m.inferred_tags = r.inferred_tags
         m.status = r.status
         m.start_year = r.start_year
         m.chapters = r.chapters
@@ -387,7 +537,7 @@ async def retrieve_similar_manga(
         m.cover_image_url = r.cover_image_url
         m.banner_image = r.banner_image
         m.site_url = r.site_url
-        m.format_type = infer_format_type(r.title_native, r.tags, r.genres, r.site_url)
+        m.format_type = infer_format_type(r.title_native, r.tags, r.genres, r.site_url, r.inferred_tags)
 
         score_val = float(r.hybrid_score)
         # Boost perceived match percentage for exact/prefix title matches
@@ -397,11 +547,15 @@ async def retrieve_similar_manga(
             elif r.title_boost >= 0.6:
                 score_val = max(score_val, 0.88)
 
-        candidates.append({
+        cand_dict = {
             "manga": m,
             "similarity_score": score_val,
             "format_type": m.format_type
-        })
+        }
+        if hasattr(r, 'tag_alignment'):
+            cand_dict["tag_alignment"] = round(float(r.tag_alignment), 4)
+
+        candidates.append(cand_dict)
 
     return candidates
 
@@ -524,15 +678,15 @@ async def sample_candidates_from_db(
             st_list = ", ".join(f"'{s.replace('\'', '\'\'')}'" for s in filters.status)
             where_clauses.append(f"status IN ({st_list})")
         if filters.min_year:
-            where_clauses.append(f"start_year >= {int(filters.min_year)}")
+            where_clauses.append(f"start_year >= {filters.min_year}")
         if filters.max_year:
-            where_clauses.append(f"start_year <= {int(filters.max_year)}")
+            where_clauses.append(f"start_year <= {filters.max_year}")
         if filters.min_score:
-            where_clauses.append(f"average_score >= {int(filters.min_score)}")
+            where_clauses.append(f"average_score >= {filters.min_score}")
         if filters.min_chapters:
-            where_clauses.append(f"chapters >= {int(filters.min_chapters)}")
+            where_clauses.append(f"chapters >= {filters.min_chapters}")
         if filters.max_chapters:
-            where_clauses.append(f"chapters <= {int(filters.max_chapters)}")
+            where_clauses.append(f"chapters <= {filters.max_chapters}")
         if filters.genres:
             cond = build_genre_sql_condition(filters.genres, exclude=False)
             if cond:
@@ -568,7 +722,7 @@ async def sample_candidates_from_db(
         "offset": rand_offset,
         "seed": rand_seed
     })
-    return result.all()
+    return list(result.all())
 
 
 async def refill_roulette_pool(filters: Optional[RecommendFilters], session_id: Optional[str] = None):

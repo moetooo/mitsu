@@ -4,9 +4,8 @@ from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 from ..db import AsyncSessionLocal
 from ..db_models import DiscoveryQueue, Manga
-from .jikan_client import fetch_detail as fetch_jikan_detail
 from .mangadex_client import fetch_detail as fetch_mangadex_detail
-from .normalize import jikan_to_record, mangadex_to_record
+from .normalize import mangadex_to_record
 from ..services.embedding import generate_embedding
 
 from .upsert import smart_upsert_manga
@@ -34,13 +33,7 @@ async def enrich_batch(batch_size: int = 50):
         async def process_queue_row(row: DiscoveryQueue):
             row.enrich_attempts += 1
             try:
-                if row.source == "jikan":
-                    raw = await fetch_jikan_detail(int(row.external_id))
-                    if not raw:
-                        row.last_error = "Empty response from Jikan"
-                        return None
-                    record = jikan_to_record(raw)
-                elif row.source == "mangadex":
+                if row.source == "mangadex":
                     raw = await fetch_mangadex_detail(row.external_id)
                     if not raw:
                         row.last_error = "Empty response from MangaDex"

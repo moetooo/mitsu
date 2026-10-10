@@ -128,7 +128,8 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
                 query_embedding=target_emb,
                 filters=request.filters,
                 limit=needed_limit + 5,
-                offset=target_offset
+                offset=target_offset,
+                query_inferred_tags=getattr(target_manga, "inferred_tags", None) if target_manga else None
             )
             for c in similar_candidates:
                 if c["manga"].id != mid:
@@ -193,7 +194,8 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
             average_score=m.average_score,
             similarity_score=c["similarity_score"],
             llm_reasoning=reasoning_map.get(m.id),
-            format_type=getattr(m, "format_type", None) or c.get("format_type")
+            format_type=getattr(m, "format_type", None) or c.get("format_type"),
+            inferred_tags=getattr(m, "inferred_tags", None)
         ))
         
     response = RecommendResponse(
