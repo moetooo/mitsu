@@ -244,6 +244,60 @@ def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
         return None
     return f"({' OR '.join(fmt_conditions)})"
 
+def apply_filter_criteria(
+    filters: Optional[RecommendFilters],
+    where_clauses: List[str],
+    params: Dict[str, Any]
+) -> None:
+    """Applies structured RecommendFilters criteria into parameterized WHERE clauses and bind params."""
+    if not filters:
+        return
+
+    if filters.status:
+        status_placeholders = []
+        for idx, st_val in enumerate(filters.status):
+            p_key = f"st_{idx}"
+            params[p_key] = st_val
+            status_placeholders.append(f":{p_key}")
+        where_clauses.append(f"status IN ({', '.join(status_placeholders)})")
+
+    if filters.min_year is not None:
+        params["min_year"] = filters.min_year
+        where_clauses.append("start_year >= :min_year")
+
+    if filters.max_year is not None:
+        params["max_year"] = filters.max_year
+        where_clauses.append("start_year <= :max_year")
+
+    if filters.min_score is not None:
+        params["min_score"] = filters.min_score
+        where_clauses.append("average_score >= :min_score")
+
+    if filters.min_chapters is not None:
+        params["min_chapters"] = filters.min_chapters
+        where_clauses.append("chapters >= :min_chapters")
+
+    if filters.max_chapters is not None:
+        params["max_chapters"] = filters.max_chapters
+        where_clauses.append("chapters <= :max_chapters")
+
+    if filters.genres:
+        cond = build_genre_sql_condition(filters.genres, exclude=False)
+        if cond:
+            where_clauses.append(cond)
+
+    if filters.exclude_genres:
+        cond = build_genre_sql_condition(filters.exclude_genres, exclude=True)
+        if cond:
+            where_clauses.append(cond)
+
+    if filters.format_type:
+        raw_fmts = filters.format_type if isinstance(filters.format_type, list) else [filters.format_type]
+        fmt_cond = build_format_sql_condition(raw_fmts)
+        if fmt_cond:
+            where_clauses.append(fmt_cond)
+
+
 def infer_format_type(
     title_native: Optional[str] = None,
     tags: Any = None,
@@ -380,33 +434,7 @@ async def retrieve_similar_manga(
     if not allow_nsfw:
         where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")
     
-    if filters:
-        if filters.status:
-            st_list = ", ".join(f"'{s.replace('\'', '\'\'')}'" for s in filters.status)
-            where_clauses.append(f"status IN ({st_list})")
-        if filters.min_year:
-            where_clauses.append(f"start_year >= {filters.min_year}")
-        if filters.max_year:
-            where_clauses.append(f"start_year <= {filters.max_year}")
-        if filters.min_score:
-            where_clauses.append(f"average_score >= {filters.min_score}")
-        if filters.min_chapters:
-            where_clauses.append(f"chapters >= {filters.min_chapters}")
-        if filters.max_chapters:
-            where_clauses.append(f"chapters <= {filters.max_chapters}")
-        if filters.genres:
-            cond = build_genre_sql_condition(filters.genres, exclude=False)
-            if cond:
-                where_clauses.append(cond)
-        if filters.exclude_genres:
-            cond = build_genre_sql_condition(filters.exclude_genres, exclude=True)
-            if cond:
-                where_clauses.append(cond)
-        if filters.format_type:
-            raw_fmts = filters.format_type if isinstance(filters.format_type, list) else [filters.format_type]
-            fmt_cond = build_format_sql_condition(raw_fmts)
-            if fmt_cond:
-                where_clauses.append(fmt_cond)
+    apply_filter_criteria(filters, where_clauses, params)
 
     where_str = " AND ".join(where_clauses)
 
@@ -673,37 +701,17 @@ async def sample_candidates_from_db(
     if not allow_nsfw:
         where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")
 
-    if filters:
-        if filters.status:
-            st_list = ", ".join(f"'{s.replace('\'', '\'\'')}'" for s in filters.status)
-            where_clauses.append(f"status IN ({st_list})")
-        if filters.min_year:
-            where_clauses.append(f"start_year >= {filters.min_year}")
-        if filters.max_year:
-            where_clauses.append(f"start_year <= {filters.max_year}")
-        if filters.min_score:
-            where_clauses.append(f"average_score >= {filters.min_score}")
-        if filters.min_chapters:
-            where_clauses.append(f"chapters >= {filters.min_chapters}")
-        if filters.max_chapters:
-            where_clauses.append(f"chapters <= {filters.max_chapters}")
-        if filters.genres:
-            cond = build_genre_sql_condition(filters.genres, exclude=False)
-            if cond:
-                where_clauses.append(cond)
-        if filters.exclude_genres:
-            cond = build_genre_sql_condition(filters.exclude_genres, exclude=True)
-            if cond:
-                where_clauses.append(cond)
-        if filters.format_type:
-            raw_fmts = filters.format_type if isinstance(filters.format_type, list) else [filters.format_type]
-            fmt_cond = build_format_sql_condition(raw_fmts)
-            if fmt_cond:
-                where_clauses.append(fmt_cond)
-
-    where_str = " AND ".join(where_clauses)
     rand_offset = random.randint(0, 40)
     rand_seed = f"seed_{random.randint(1, 999999999)}_{time.time()}"
+    params: Dict[str, Any] = {
+        "limit": sample_limit, 
+        "offset": rand_offset,
+        "seed": rand_seed
+    }
+
+    apply_filter_criteria(filters, where_clauses, params)
+
+    where_str = " AND ".join(where_clauses)
 
     # Safe, uniform pseudo-random distribution via core PostgreSQL hashtext (0 overflow risk)
     sql = text(f"""
@@ -717,11 +725,7 @@ async def sample_candidates_from_db(
         LIMIT :limit OFFSET :offset;
     """)
 
-    result = await session.execute(sql, {
-        "limit": sample_limit, 
-        "offset": rand_offset,
-        "seed": rand_seed
-    })
+    result = await session.execute(sql, params)
     return list(result.all())
 
 
