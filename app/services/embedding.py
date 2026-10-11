@@ -17,5 +17,9 @@ def generate_embedding_sync(text: str):
     return embeddings[0].tolist()
 
 async def generate_embedding(text: str):
-    loop = asyncio.get_event_loop()
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.get_event_loop()
     return await loop.run_in_executor(executor, generate_embedding_sync, text)
+

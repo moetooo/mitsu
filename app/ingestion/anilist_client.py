@@ -21,6 +21,7 @@ query ($page: Int, $perPage: Int, $startDateGreater: FuzzyDateInt, $startDateLes
       volumes
       averageScore
       popularity
+      synonyms
       coverImage { large medium color }
       bannerImage
       siteUrl

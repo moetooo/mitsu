@@ -46,9 +46,16 @@ scratch/
 # Local utility & test scripts
 preflight.py
 add_column.py
+partition_manga.py
 precompute_similarities.py
 tests/
 pytest.ini
 temp_*.py
 check_*.py
+scripts/
+unused_and_obsolete_files.txt
+
+# Generated ML models
+models/
+
 
