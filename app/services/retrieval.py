@@ -365,7 +365,12 @@ async def find_matched_title(
     res = await session.execute(text("""
         SELECT id, title_english, title_romaji, embedding::real[], popularity
         FROM manga
-        WHERE (LOWER(title_english) = :q OR LOWER(title_romaji) = :q)
+        WHERE (
+            LOWER(title_english) = :q 
+            OR LOWER(title_romaji) = :q
+            OR LOWER(COALESCE(title_native, '')) = :q
+            OR :q = ANY(SELECT LOWER(t) FROM unnest(COALESCE(alternative_titles, '{}')) AS t)
+        )
           AND embedding IS NOT NULL
         ORDER BY popularity DESC NULLS LAST
         LIMIT 1;
@@ -458,7 +463,7 @@ async def retrieve_similar_manga(
             CASE 
               WHEN LOWER(COALESCE(title_english, '')) = :clean_q OR LOWER(COALESCE(title_romaji, '')) = :clean_q OR LOWER(COALESCE(title_native, '')) = :clean_q THEN 1.0
               WHEN LOWER(COALESCE(title_english, '')) LIKE :prefix_q OR LOWER(COALESCE(title_romaji, '')) LIKE :prefix_q THEN 0.6
-              WHEN LOWER(COALESCE(title_english, '')) LIKE :contain_q OR LOWER(COALESCE(title_romaji, '')) LIKE :contain_q THEN 0.3
+              WHEN LOWER(COALESCE(title_english, '')) LIKE :contain_q OR LOWER(COALESCE(title_romaji, '')) LIKE :contain_q OR LOWER(COALESCE(array_to_string(alternative_titles, ' '), '')) LIKE :contain_q THEN 0.3
               ELSE 0.0
             END as title_boost,
         """

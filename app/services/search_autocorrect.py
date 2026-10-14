@@ -48,11 +48,12 @@ async def _get_vocabulary(db: AsyncSession) -> Set[str]:
     if _vocabulary is not None:
         return _vocabulary
 
-    result = await db.execute(select(Manga.title_english, Manga.title_romaji, Manga.genres))
+    result = await db.execute(select(Manga.title_english, Manga.title_romaji, Manga.genres, Manga.alternative_titles))
     values: List[str | None] = []
-    for title_english, title_romaji, genres in result.all():
+    for title_english, title_romaji, genres, alt_titles in result.all():
         values.extend((title_english, title_romaji))
         values.extend(genres or [])
+        values.extend(alt_titles or [])
     _vocabulary = set(sorted(_words(values))[:MAX_VOCABULARY_SIZE])
     return _vocabulary
 

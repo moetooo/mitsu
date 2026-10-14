@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
+from sqlalchemy import select, or_, func
 from typing import List
 from ..db import get_db
 from ..db_models import Manga
@@ -19,12 +19,19 @@ async def search_manga(q: str, db: AsyncSession = Depends(get_db)):
     clean_q = await autocorrect_query(clean_q, db)
         
     search_term = f"%{clean_q}%"
-    stmt = select(Manga).where(
-        or_(
-            Manga.title_english.ilike(search_term),
-            Manga.title_romaji.ilike(search_term)
+    stmt = (
+        select(Manga)
+        .where(
+            or_(
+                Manga.title_english.ilike(search_term),
+                Manga.title_romaji.ilike(search_term),
+                Manga.title_native.ilike(search_term),
+                func.array_to_string(Manga.alternative_titles, ' ').ilike(search_term),
+            )
         )
-    ).limit(10)
+        .order_by(Manga.popularity.desc().nullslast())
+        .limit(10)
+    )
     
     result = await db.execute(stmt)
     return result.scalars().all()
