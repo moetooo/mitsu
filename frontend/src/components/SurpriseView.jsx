@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
+import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 
 function SurpriseCoverImage({ url, title, allowHover }) {
   const isCached = isCoverCached(url);
@@ -518,6 +519,32 @@ export default function SurpriseView({
               </span>
             ))}
           </div>
+
+          {/* Inferred Narrative Tags */}
+          {Array.isArray(mangaItem.inferred_tags) && mangaItem.inferred_tags.length > 0 && (
+            <div className="space-y-1 pt-0.5">
+              <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider font-semibold block">
+                Narrative Elements
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {mangaItem.inferred_tags.slice(0, 6).map((t, idx) => {
+                  const tag = normalizeTag(t);
+                  const style = getTagStyle(tag.category);
+                  const pct = Math.round(tag.confidence * 100);
+                  return (
+                    <span 
+                      key={tag.slug || tag.name || idx}
+                      title={`${tag.name} (${tag.category}) • ${pct}% confidence`}
+                      className={`inline-flex items-center gap-1 text-[9px] font-mono px-2 py-0.5 rounded-full border shadow-sm ${style.bg} ${style.border} ${style.text}`}
+                    >
+                      <span className={`w-1 h-1 rounded-full ${style.dot}`} />
+                      <span>{tag.name}</span>
+                    </span>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Full Synopsis */}
           <div className="space-y-1.5 pt-1">

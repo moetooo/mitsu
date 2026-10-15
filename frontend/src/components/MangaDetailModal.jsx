@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
+import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 
 function SimilarCoverItem({ item, onSelect }) {
   const isCached = isCoverCached(item.cover_image_url);
@@ -370,6 +371,46 @@ export default function MangaDetailModal({
                 {manga.synopsis || "No detailed synopsis available."}
               </p>
             </div>
+
+            {/* Story & Narrative Elements (Inferred Tags) */}
+            {Array.isArray(manga.inferred_tags) && manga.inferred_tags.length > 0 && (
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xs font-mono font-bold text-[var(--text-muted)] uppercase tracking-wider flex items-center gap-1.5">
+                    <span className="text-[var(--accent-vermillion)] text-[11px]">✦</span>
+                    Story & Narrative Elements
+                  </h3>
+                  <span className="text-[10px] text-[var(--text-muted)] font-mono">
+                    AI Inferred • Click to explore
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {manga.inferred_tags.map((t, idx) => {
+                    const tag = normalizeTag(t);
+                    const style = getTagStyle(tag.category);
+                    const pct = Math.round(tag.confidence * 100);
+                    return (
+                      <button
+                        key={tag.slug || tag.name || idx}
+                        type="button"
+                        onClick={() => {
+                          if (onSelectTag) onSelectTag(tag.name);
+                          onClose();
+                        }}
+                        title={`${tag.name} • ${style.label} (${pct}% confidence) • Click to search`}
+                        className={`inline-flex items-center gap-1.5 px-3 py-1 bg-[var(--surface-color)] ${style.text} text-xs rounded-full border ${style.border} ${style.bg} hover:border-[var(--accent-vermillion)] hover:text-[var(--accent-vermillion)] transition-all cursor-pointer font-mono shadow-sm group`}
+                      >
+                        <span className={`w-1.5 h-1.5 rounded-full ${style.dot} group-hover:bg-[var(--accent-vermillion)] transition-colors`} />
+                        <span className="font-medium">{tag.name}</span>
+                        <span className="text-[9px] uppercase tracking-wider opacity-60 font-sans border-l border-current/20 pl-1.5">
+                          {style.label}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Clickable Genres & Tags */}
             {((manga.genres && manga.genres.length > 0) || (manga.tags && manga.tags.length > 0)) && (
