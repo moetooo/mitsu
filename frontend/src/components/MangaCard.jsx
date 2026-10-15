@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect, memo } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
+import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 
 function MangaCard({ 
   manga, 
@@ -175,7 +176,7 @@ function MangaCard({
 
       {/* Card Info & Typography */}
       <div className="pt-3 px-1 space-y-1.5 flex-grow flex flex-col justify-between">
-        <div>
+        <div className="space-y-1">
           <h3 
             title={manga.title}
             className="font-serif-jp font-bold text-xs md:text-sm text-[var(--text-color)] line-clamp-2 leading-snug group-hover:text-[var(--accent-vermillion)] transition-colors h-[2.5rem] overflow-hidden flex items-start"
@@ -191,11 +192,40 @@ function MangaCard({
                 e.stopPropagation();
                 if (onSelectAuthor) onSelectAuthor(authorName);
               }}
-              className="text-[10px] font-mono text-[var(--accent-indigo)] hover:underline truncate block max-w-full text-left mt-0.5"
+              className="text-[10px] font-mono text-[var(--accent-indigo)] hover:underline truncate block max-w-full text-left"
               title={`View more works by ${authorName}`}
             >
               by {authorName}
             </button>
+          )}
+
+          {/* Category-Aware Inferred Narrative Tags */}
+          {Array.isArray(manga.inferred_tags) && manga.inferred_tags.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1 pt-0.5 overflow-hidden max-h-[1.6rem]">
+              {manga.inferred_tags.slice(0, 2).map((tag, tIdx) => {
+                const tagObj = normalizeTag(tag);
+                if (!tagObj || !tagObj.name) return null;
+                const style = getTagStyle(tagObj.category);
+                return (
+                  <span
+                    key={tagObj.slug || tIdx}
+                    className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] font-mono border font-medium tracking-tight ${style.bg} ${style.border} ${style.text}`}
+                    title={`${style.label}: ${tagObj.name} (${Math.round(tagObj.confidence * 100)}% confidence)`}
+                  >
+                    <span className={`w-1 h-1 rounded-full ${style.dot}`} />
+                    <span className="truncate max-w-[95px]">{tagObj.name}</span>
+                  </span>
+                );
+              })}
+              {manga.inferred_tags.length > 2 && (
+                <span 
+                  className="text-[9px] font-mono text-[var(--text-muted)] self-center px-0.5"
+                  title={`${manga.inferred_tags.length - 2} more story elements`}
+                >
+                  +{manga.inferred_tags.length - 2}
+                </span>
+              )}
+            </div>
           )}
         </div>
 
@@ -236,6 +266,8 @@ export default memo(MangaCard, (prevProps, nextProps) => {
     prevProps.hoverAccent === nextProps.hoverAccent &&
     prevProps.rank === nextProps.rank &&
     prevProps.showMatchPct === nextProps.showMatchPct &&
-    prevProps.manga.similarity_score === nextProps.manga.similarity_score
+    prevProps.manga.similarity_score === nextProps.manga.similarity_score &&
+    prevProps.manga.inferred_tags === nextProps.manga.inferred_tags
   );
 });
+

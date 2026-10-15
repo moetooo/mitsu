@@ -27,6 +27,7 @@ pnpm-debug.log*
 
 # IDEs & System Files
 .vscode/
+.agents/
 !.vscode/extensions.json
 .idea/
 *.swp
