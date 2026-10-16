@@ -69,4 +69,15 @@ Index('idx_manga_alt_titles', Manga.alternative_titles, postgresql_using='gin')
 Index('idx_manga_inferred_tags', Manga.inferred_tags, postgresql_using='gin')
 Index('idx_manga_status', Manga.status)
 Index('idx_manga_start_year', Manga.start_year)
+Index('idx_manga_title_english_trgm', Manga.title_english, postgresql_using='gin', postgresql_ops={'title_english': 'gin_trgm_ops'})
+Index('idx_manga_title_romaji_trgm', Manga.title_romaji, postgresql_using='gin', postgresql_ops={'title_romaji': 'gin_trgm_ops'})
+Index('idx_manga_title_native_trgm', Manga.title_native, postgresql_using='gin', postgresql_ops={'title_native': 'gin_trgm_ops'})
+Index(
+    'idx_manga_embedding_hnsw',
+    Manga.embedding,
+    postgresql_using='hnsw',
+    postgresql_with={'m': 16, 'ef_construction': 64},
+    postgresql_ops={'embedding': 'vector_cosine_ops'}
+)
+
 
