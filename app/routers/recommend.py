@@ -2,6 +2,7 @@ import time
 from typing import List
 from fastapi import APIRouter, Depends
 from sqlalchemy import select
+from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import RecommendRequest, RecommendResponse, RecommendationResult, RouletteRequest
 from ..db_models import Manga
@@ -109,7 +110,7 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         t0 = time.time()
         top_candidates = []
         if request.page == 1:
-            res = await db.execute(select(Manga).where(Manga.id == mid))
+            res = await db.execute(select(Manga).options(defer(Manga.embedding)).where(Manga.id == mid))
             target_manga = res.scalar_one_or_none()
             if target_manga:
                 top_candidates.append({

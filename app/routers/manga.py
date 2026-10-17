@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
+from sqlalchemy.orm import defer
 from typing import List, Optional, Any, Dict
 import httpx
 from ..db import get_db
@@ -26,12 +27,19 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
         return cached_data
 
     # Pool 1: Top Popular Hits
-    stmt_pop = select(Manga).where(Manga.cover_image_url.isnot(None)).order_by(Manga.popularity.desc().nullslast()).limit(25)
+    stmt_pop = (
+        select(Manga)
+        .options(defer(Manga.embedding))
+        .where(Manga.cover_image_url.isnot(None))
+        .order_by(Manga.popularity.desc().nullslast())
+        .limit(25)
+    )
     res_pop = list((await db.execute(stmt_pop)).scalars().all())
 
     # Pool 2: Underrated / Hidden Gems (High average_score >= 78, but lower popularity)
     stmt_underrated = (
         select(Manga)
+        .options(defer(Manga.embedding))
         .where(
             Manga.cover_image_url.isnot(None),
             Manga.average_score >= 78,
@@ -45,6 +53,7 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
     # Pool 3: Critically Acclaimed / High Score (average_score >= 84)
     stmt_acclaimed = (
         select(Manga)
+        .options(defer(Manga.embedding))
         .where(Manga.cover_image_url.isnot(None), Manga.average_score >= 84)
         .order_by(Manga.average_score.desc().nullslast())
         .limit(25)
@@ -52,7 +61,12 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
     res_acclaimed = list((await db.execute(stmt_acclaimed)).scalars().all())
 
     # Fallback pool if DB is small
-    stmt_all = select(Manga).where(Manga.cover_image_url.isnot(None)).limit(50)
+    stmt_all = (
+        select(Manga)
+        .options(defer(Manga.embedding))
+        .where(Manga.cover_image_url.isnot(None))
+        .limit(50)
+    )
     res_all = list((await db.execute(stmt_all)).scalars().all())
 
     rng = random.Random(time_slot_str)
@@ -250,6 +264,7 @@ async def get_trending_manga(
         offset = (page - 1) * limit
         stmt = (
             select(Manga)
+            .options(defer(Manga.embedding))
             .where(*where_clauses)
             .order_by((Manga.popularity * Manga.average_score).desc().nullslast())
             .offset(offset)
@@ -289,7 +304,7 @@ async def get_manga(manga_id: int, db: AsyncSession = Depends(get_db)):
     if cached_data:
         return cached_data
 
-    stmt = select(Manga).where(Manga.id == manga_id)
+    stmt = select(Manga).options(defer(Manga.embedding)).where(Manga.id == manga_id)
     result = await db.execute(stmt)
     manga = result.scalar_one_or_none()
     
@@ -318,7 +333,7 @@ async def get_similar_manga(manga_id: int, limit: int = 6, allow_nsfw: bool = Fa
     
     if getattr(manga, 'similar_mangas', None):
         similar_ids = [item["id"] for item in manga.similar_mangas][:limit + 10]
-        stmt_sim = select(Manga).where(Manga.id.in_(similar_ids))
+        stmt_sim = select(Manga).options(defer(Manga.embedding)).where(Manga.id.in_(similar_ids))
         res_sim = await db.execute(stmt_sim)
         sim_mangas_map: Dict[Any, Any] = {m.id: m for m in res_sim.scalars().all()}
         
