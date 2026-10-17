@@ -11,13 +11,22 @@ from ..services.embedding import generate_embedding
 async def init_db():
     async with engine.begin() as conn:
         await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
+        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm;"))
         await conn.execute(text("ALTER TABLE manga ADD COLUMN IF NOT EXISTS mal_id INTEGER UNIQUE;"))
         await conn.execute(text("ALTER TABLE manga ADD COLUMN IF NOT EXISTS mangadex_id VARCHAR UNIQUE;"))
         await conn.execute(text("ALTER TABLE manga ALTER COLUMN anilist_id DROP NOT NULL;"))
         await conn.run_sync(Base.metadata.create_all)
+        # Drop legacy IVFFlat index if present
+        await conn.execute(text("DROP INDEX IF EXISTS idx_manga_embedding;"))
+        # HNSW index on vector embeddings for sub-5ms cosine similarity
         await conn.execute(
-            text("CREATE INDEX IF NOT EXISTS idx_manga_embedding ON manga USING ivfflat (embedding vector_cosine_ops) WITH (lists = 100);")
+            text("CREATE INDEX IF NOT EXISTS idx_manga_embedding_hnsw ON manga USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);")
         )
+        # GIN Trigram indexes on titles for sub-millisecond similarity and ILIKE search
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_manga_title_english_trgm ON manga USING gin (title_english gin_trgm_ops);"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_manga_title_romaji_trgm ON manga USING gin (title_romaji gin_trgm_ops);"))
+        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_manga_title_native_trgm ON manga USING gin (title_native gin_trgm_ops);"))
+
 
 from .upsert import smart_upsert_manga
 

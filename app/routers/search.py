@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
+from sqlalchemy.orm import defer
 from typing import List
 from ..db import get_db
 from ..db_models import Manga
@@ -21,6 +22,7 @@ async def search_manga(q: str, db: AsyncSession = Depends(get_db)):
     search_term = f"%{clean_q}%"
     stmt = (
         select(Manga)
+        .options(defer(Manga.embedding))
         .where(
             or_(
                 Manga.title_english.ilike(search_term),
