@@ -1,10 +1,34 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from brotli_asgi import BrotliMiddleware
 from .routers import recommend, manga, search, admin
 from .middleware.rate_limit import RateLimitMiddleware
+from .services.embedding import generate_embedding
+from .services.cache import redis_client
+from .db import engine
 
-app = FastAPI(title="Mitsu API")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Pre-warm the embedding model to eliminate first-query cold starts
+    try:
+        await generate_embedding("warmup")
+    except Exception as e:
+        pass
+
+    yield
+
+    # Shutdown: Gracefully close database engine and Redis connection pools
+    try:
+        await engine.dispose()
+    except Exception:
+        pass
+    try:
+        await redis_client.aclose()
+    except Exception:
+        pass
+
+app = FastAPI(title="Mitsu API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
