@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import defer
@@ -16,7 +16,8 @@ from datetime import datetime, timezone
 router = APIRouter()
 
 @router.get("/manga/featured", response_model=List[RecommendationResult])
-async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db)):
+async def get_featured_manga(response: Response, limit: int = 6, db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "public, max-age=900, stale-while-revalidate=60"
     now = datetime.now(timezone.utc)
     slot_minute = (now.minute // 15) * 15
     time_slot_str = f"{now.strftime('%Y-%m-%d-%H')}-{slot_minute:02d}"
@@ -103,7 +104,7 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
 
     rng.shuffle(selected_items)
 
-    response = [
+    results = [
         RecommendationResult(
             id=m.id,
             anilist_id=m.anilist_id,
@@ -125,11 +126,12 @@ async def get_featured_manga(limit: int = 6, db: AsyncSession = Depends(get_db))
         ) for m, badge in selected_items
     ]
     
-    await set_cached(cache_key, [r.model_dump() for r in response], ttl=900)
-    return response
+    await set_cached(cache_key, [r.model_dump() for r in results], ttl=900)
+    return results
 
 @router.get("/manga/trending", response_model=List[RecommendationResult])
 async def get_trending_manga(
+    response: Response,
     limit: int = 12,
     page: int = 1,
     format_type: Optional[str] = None,
@@ -137,6 +139,7 @@ async def get_trending_manga(
     top10_only: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
+    response.headers["Cache-Control"] = "public, max-age=1800, stale-while-revalidate=120"
     fmt = (format_type or "all").lower()
     genre_clean = genre.strip() if genre and genre.strip() and genre.strip().lower() != "all" else None
     
@@ -298,7 +301,8 @@ async def get_trending_manga(
     return trending_results
 
 @router.get("/manga/{manga_id}", response_model=MangaDetail)
-async def get_manga(manga_id: int, db: AsyncSession = Depends(get_db)):
+async def get_manga(manga_id: int, response: Response, db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=300"
     cache_key = f"manga:detail:{manga_id}"
     cached_data = await get_cached(cache_key)
     if cached_data:
@@ -316,7 +320,8 @@ async def get_manga(manga_id: int, db: AsyncSession = Depends(get_db)):
     return detail
 
 @router.get("/manga/{manga_id}/similar", response_model=List[RecommendationResult])
-async def get_similar_manga(manga_id: int, limit: int = 6, allow_nsfw: bool = False, db: AsyncSession = Depends(get_db)):
+async def get_similar_manga(manga_id: int, response: Response, limit: int = 6, allow_nsfw: bool = False, db: AsyncSession = Depends(get_db)):
+    response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=300"
     cache_key = f"manga:similar:{manga_id}:{limit}:{allow_nsfw}"
     cached_data = await get_cached(cache_key)
     if cached_data:

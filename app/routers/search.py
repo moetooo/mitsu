@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, or_, func
 from sqlalchemy.orm import defer
@@ -14,10 +14,12 @@ from ..services.cache import get_cached, set_cached
 router = APIRouter()
 
 @router.get("/search", response_model=List[MangaDetail])
-async def search_manga(q: str, db: AsyncSession = Depends(get_db)):
+async def search_manga(q: str, response: Response, db: AsyncSession = Depends(get_db)):
     clean_q = sanitize_search_query(q)
     if not clean_q:
         return []
+
+    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=60"
 
     # 1. Check Redis cache first to bypass DB and autocorrect for frequent/keystroke queries
     cache_key = f"search:{clean_q}"
