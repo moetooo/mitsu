@@ -1,14 +1,19 @@
 import { useState, useEffect } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import { normalizeTag, getTagStyle } from '../utils/tagUtils';
+import CoverFallback from './CoverFallback';
 
 function SimilarCoverItem({ item, onSelect }) {
   const isCached = isCoverCached(item.cover_image_url);
   const [loaded, setLoaded] = useState(isCached);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
+    setError(false);
     if (isCoverCached(item.cover_image_url)) {
       setLoaded(true);
+    } else {
+      setLoaded(false);
     }
   }, [item.cover_image_url]);
 
@@ -17,24 +22,32 @@ function SimilarCoverItem({ item, onSelect }) {
       onClick={() => onSelect(item)}
       className="w-28 sm:w-32 shrink-0 group relative aspect-[2/3] rounded-2xl overflow-hidden cursor-pointer border border-[var(--border-color)] hover:border-[var(--accent-vermillion)] transition-all duration-200 shadow-md bg-black"
     >
-      {!loaded && item.cover_image_url && (
+      {!loaded && !error && item.cover_image_url && (
         <div className="absolute inset-0 shimmer-paper-loading z-10 flex flex-col items-center justify-center p-2">
           <span className="text-[10px] font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
         </div>
       )}
-      <img 
-        src={item.cover_image_url} 
-        alt={item.title}
-        referrerPolicy="no-referrer"
-        decoding="async"
-        onLoad={() => {
-          markCoverCached(item.cover_image_url);
-          setLoaded(true);
-        }}
-        className={`w-full h-full object-cover transition-all duration-300 group-hover:scale-110 ${
-          loaded ? 'opacity-100' : 'opacity-0'
-        }`}
-      />
+      {error || !item.cover_image_url ? (
+        <CoverFallback title={item.title} compact />
+      ) : (
+        <img 
+          src={item.cover_image_url} 
+          alt={item.title}
+          referrerPolicy="no-referrer"
+          decoding="async"
+          onLoad={() => {
+            markCoverCached(item.cover_image_url);
+            setLoaded(true);
+          }}
+          onError={() => {
+            setError(true);
+            setLoaded(true);
+          }}
+          className={`w-full h-full object-cover transition-all duration-300 group-hover:scale-110 ${
+            loaded ? 'opacity-100' : 'opacity-0'
+          }`}
+        />
+      )}
       <div className="absolute inset-0 bg-gradient-to-t from-black via-black/30 to-transparent opacity-90 p-2.5 flex flex-col justify-end">
         <span className="text-[11px] font-serif-jp font-bold text-white line-clamp-2 leading-tight">
           {item.title}
@@ -67,10 +80,14 @@ export default function MangaDetailModal({
   const [loadingSimilar, setLoadingSimilar] = useState(false);
   const [copied, setCopied] = useState(false);
   const [coverLoaded, setCoverLoaded] = useState(() => isCoverCached(manga?.cover_image_url));
+  const [coverError, setCoverError] = useState(false);
 
   useEffect(() => {
+    setCoverError(false);
     if (manga?.cover_image_url) {
       setCoverLoaded(isCoverCached(manga.cover_image_url));
+    } else {
+      setCoverLoaded(false);
     }
   }, [manga?.cover_image_url]);
 
@@ -163,7 +180,7 @@ export default function MangaDetailModal({
       />
 
       {/* Feature 314: Atmospheric Dynamic Ambient Glow Sync */}
-      {manga && (manga.banner_image || manga.cover_image_url) && (
+      {manga && (manga.banner_image || (!coverError && manga.cover_image_url)) && (
         <div 
           className="absolute inset-0 overflow-hidden pointer-events-none z-0 flex items-center justify-center transition-all duration-700 ease-out"
           aria-hidden="true"
@@ -256,27 +273,35 @@ export default function MangaDetailModal({
               {/* Framed Print Cover */}
               <div className="relative group w-full max-w-[260px] md:max-w-none aspect-[2/3] rounded-2xl overflow-hidden border border-[var(--border-color)] shadow-lg bg-black/40">
                 {/* Feature 34: Shimmer Paper Skeleton Loader matching search cards */}
-                {!coverLoaded && manga.cover_image_url && (
+                {!coverLoaded && !coverError && manga.cover_image_url && (
                   <div className="absolute inset-0 shimmer-paper-loading z-10 flex flex-col items-center justify-center p-4">
                     <span className="text-base font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
                   </div>
                 )}
 
-                <img 
-                  src={manga.cover_image_url} 
-                  alt={manga.title}
-                  referrerPolicy="no-referrer"
-                  decoding="async"
-                  onLoad={() => {
-                    markCoverCached(manga.cover_image_url);
-                    setCoverLoaded(true);
-                  }}
-                  className={`w-full h-full object-cover transition-all duration-300 ${
-                    coverLoaded ? 'opacity-100' : 'opacity-0'
-                  } ${
-                    nsfwBlur && isMature ? 'blur-md group-hover:blur-none scale-105' : ''
-                  }`}
-                />
+                {coverError || !manga.cover_image_url ? (
+                  <CoverFallback title={manga.title} />
+                ) : (
+                  <img 
+                    src={manga.cover_image_url} 
+                    alt={manga.title}
+                    referrerPolicy="no-referrer"
+                    decoding="async"
+                    onLoad={() => {
+                      markCoverCached(manga.cover_image_url);
+                      setCoverLoaded(true);
+                    }}
+                    onError={() => {
+                      setCoverError(true);
+                      setCoverLoaded(true);
+                    }}
+                    className={`w-full h-full object-cover transition-all duration-300 ${
+                      coverLoaded ? 'opacity-100' : 'opacity-0'
+                    } ${
+                      nsfwBlur && isMature ? 'blur-md group-hover:blur-none scale-105' : ''
+                    }`}
+                  />
+                )}
 
                 {/* Feature 32: NSFW Warning Overlay on Modal Cover */}
                 {nsfwBlur && isMature && (

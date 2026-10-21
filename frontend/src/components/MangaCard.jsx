@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, memo } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import { normalizeTag, getTagStyle } from '../utils/tagUtils';
+import CoverFallback from './CoverFallback';
 
 function MangaCard({ 
   manga, 
@@ -16,14 +17,18 @@ function MangaCard({
 }) {
   const isCached = isCoverCached(manga.cover_image_url);
   const [imgLoaded, setImgLoaded] = useState(isCached);
+  const [imgError, setImgError] = useState(false);
   const [isNearViewport, setIsNearViewport] = useState(isCached);
   const cardRef = useRef(null);
 
   // Sync state if cover changed or became cached
   useEffect(() => {
+    setImgError(false);
     if (isCoverCached(manga.cover_image_url)) {
       setImgLoaded(true);
       setIsNearViewport(true);
+    } else {
+      setImgLoaded(false);
     }
   }, [manga.cover_image_url]);
 
@@ -48,6 +53,11 @@ function MangaCard({
   const handleImageLoaded = () => {
     markCoverCached(manga.cover_image_url);
     setImgLoaded(true);
+  };
+
+  const handleImageError = () => {
+    setImgError(true);
+    setImgLoaded(true); // Stop shimmer skeleton from pulsing indefinitely
   };
 
   const matchPct = (showMatchPct && manga.similarity_score !== undefined && manga.similarity_score !== null) 
@@ -83,7 +93,7 @@ function MangaCard({
       className={`manga-card-item group relative bg-[var(--surface-color)] border border-[var(--border-color)] rounded-2xl p-3 cursor-pointer shadow-sm hover:shadow-md ${hoverBorderMap[hoverAccent] || hoverBorderMap.vermillion} transition-all duration-150 ease-out hover:scale-[1.02] flex flex-col justify-between`}
     >
       {/* Feature 314: Atmospheric Dynamic Ambient Glow Sync on Card Hover */}
-      {manga.cover_image_url && (
+      {manga.cover_image_url && !imgError && (
         <div 
           className="absolute -inset-1.5 rounded-2xl pointer-events-none opacity-0 group-hover:opacity-35 transition-opacity duration-300 blur-xl -z-10 overflow-hidden transform-gpu will-change-transform"
           aria-hidden="true"
@@ -103,18 +113,21 @@ function MangaCard({
       <div className="relative aspect-[2/3] w-full rounded-xl overflow-hidden bg-black/20 border border-[var(--border-color)]">
         
         {/* Feature 34: Shimmer Paper Skeleton Loader */}
-        {!imgLoaded && manga.cover_image_url && (
+        {!imgLoaded && !imgError && manga.cover_image_url && (
           <div className="absolute inset-0 shimmer-paper-loading z-10 flex flex-col items-center justify-center p-4">
             <span className="text-xs font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
           </div>
         )}
 
-        {manga.cover_image_url && (isNearViewport || imgLoaded) ? (
+        {imgError || !manga.cover_image_url ? (
+          <CoverFallback title={manga.title} />
+        ) : (isNearViewport || imgLoaded) ? (
           <img
             src={manga.cover_image_url}
             alt={manga.title}
             referrerPolicy="no-referrer"
             onLoad={handleImageLoaded}
+            onError={handleImageError}
             className={`w-full h-full object-cover transition-all duration-300 group-hover:scale-105 ${
               nsfwBlur && isMature ? 'blur-md group-hover:blur-none scale-105' : ''
             }`}
@@ -123,7 +136,7 @@ function MangaCard({
           />
         ) : (
           <div className="w-full h-full flex items-center justify-center text-[var(--text-muted)] font-serif-jp text-xs">
-            {manga.cover_image_url ? 'Loading...' : 'No Cover'}
+            Loading...
           </div>
         )}
         
