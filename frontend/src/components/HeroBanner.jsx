@@ -1,11 +1,14 @@
 import { useState, useEffect } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
+import CoverFallback from './CoverFallback';
 
 function HeroCoverThumbnail({ url, title }) {
   const isCached = isCoverCached(url);
   const [loaded, setLoaded] = useState(isCached);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
+    setError(false);
     if (isCoverCached(url)) {
       setLoaded(true);
     } else {
@@ -15,22 +18,30 @@ function HeroCoverThumbnail({ url, title }) {
 
   return (
     <div className="w-32 h-52 sm:w-38 sm:h-56 md:w-44 md:h-64 rounded-2xl overflow-hidden border-2 border-white/20 shadow-2xl shrink-0 bg-black/40 relative group-hover:scale-[1.02] transition-transform">
-      {!loaded && url && (
+      {!loaded && !error && url && (
         <div className="absolute inset-0 shimmer-paper-loading z-10 flex flex-col items-center justify-center p-4">
           <span className="text-base font-serif-jp text-[var(--accent-vermillion)] opacity-60 animate-pulse">❖</span>
         </div>
       )}
-      <img
-        src={url}
-        alt={title}
-        referrerPolicy="no-referrer"
-        decoding="async"
-        onLoad={() => {
-          markCoverCached(url);
-          setLoaded(true);
-        }}
-        className={`w-full h-full object-cover transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
-      />
+      {error || !url ? (
+        <CoverFallback title={title} />
+      ) : (
+        <img
+          src={url}
+          alt={title}
+          referrerPolicy="no-referrer"
+          decoding="async"
+          onLoad={() => {
+            markCoverCached(url);
+            setLoaded(true);
+          }}
+          onError={() => {
+            setError(true);
+            setLoaded(true);
+          }}
+          className={`w-full h-full object-cover transition-opacity duration-300 ${loaded ? 'opacity-100' : 'opacity-0'}`}
+        />
+      )}
     </div>
   );
 }
