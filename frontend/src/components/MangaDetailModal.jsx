@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 import CoverFallback from './CoverFallback';
+import { API_ROUTES } from '../config';
 
 function SimilarCoverItem({ item, onSelect }) {
   const isCached = isCoverCached(item.cover_image_url);
@@ -150,7 +151,7 @@ export default function MangaDetailModal({
     const fetchSimilar = async () => {
       setLoadingSimilar(true);
       try {
-        const res = await fetch(`http://localhost:8000/manga/${manga.id}/similar?limit=6&allow_nsfw=${allowNsfw}`);
+        const res = await fetch(API_ROUTES.similar(manga.id, 6, allowNsfw));
         if (res.ok) {
           const data = await res.json();
           if (isMounted) setSimilar(data);
