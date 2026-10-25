@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import CoverFallback from './CoverFallback';
+import { API_ROUTES } from '../config';
 
 function HeroCoverThumbnail({ url, title }) {
   const isCached = isCoverCached(url);
@@ -151,7 +152,7 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
       setItems(processMixBannerItems(mangas));
       setCurrentIndex(0);
     } else {
-      fetch('http://localhost:8000/manga/featured')
+      fetch(API_ROUTES.featured)
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data) && data.length > 0) {

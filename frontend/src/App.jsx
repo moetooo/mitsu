@@ -7,6 +7,7 @@ const BookmarksView = lazy(() => import('./components/BookmarksView'));
 const SurpriseView = lazy(() => import('./components/SurpriseView'));
 import HeroBanner from './components/HeroBanner';
 import BackToTop from './components/BackToTop';
+import { API_ROUTES } from './config';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
 const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
@@ -146,7 +147,7 @@ export default function App() {
 
     try {
       const [res] = await Promise.all([
-        fetch('http://localhost:8000/roulette', {
+        fetch(API_ROUTES.roulette, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
@@ -175,7 +176,7 @@ export default function App() {
 
   const fetchRouletteBatch = async (count = 5) => {
     try {
-      const res = await fetch('http://localhost:8000/roulette/batch', {
+      const res = await fetch(API_ROUTES.rouletteBatch, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -253,7 +254,7 @@ export default function App() {
     const formatParam = trendingFormat !== 'all' ? `&format_type=${trendingFormat}` : '';
     const genreParam = trendingGenre !== 'all' ? `&genre=${encodeURIComponent(trendingGenre)}` : '';
 
-    const url = `http://localhost:8000/manga/trending?page=${pageNum}&limit=${limit}${formatParam}${genreParam}`;
+    const url = API_ROUTES.trending(pageNum, limit, formatParam, genreParam);
 
     fetch(url)
       .then(res => res.json())
@@ -345,7 +346,7 @@ export default function App() {
     if (pageNum === 1) setPage(1);
 
     try {
-      const res = await fetch('http://localhost:8000/recommend', {
+      const res = await fetch(API_ROUTES.recommend, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
