@@ -1,4 +1,5 @@
 import time
+import logging
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,25 +11,35 @@ from .services.embedding import generate_embedding
 from .services.cache import redis_client
 from .db import engine, AsyncSessionLocal
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("mitsu")
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Pre-warm the embedding model to eliminate first-query cold starts
     try:
         await generate_embedding("warmup")
+        logger.info("FastEmbed model pre-warmed successfully.")
     except Exception as e:
-        pass
+        logger.warning("FastEmbed model pre-warming warning: %s", e)
 
     yield
 
     # Shutdown: Gracefully close database engine and Redis connection pools
     try:
         await engine.dispose()
-    except Exception:
-        pass
+        logger.info("Database connection engine disposed.")
+    except Exception as e:
+        logger.warning("Error disposing database engine: %s", e)
     try:
         await redis_client.aclose()
-    except Exception:
-        pass
+        logger.info("Redis connection pool closed.")
+    except Exception as e:
+        logger.warning("Error closing Redis client: %s", e)
 
 app = FastAPI(title="Mitsu API", lifespan=lifespan)
 

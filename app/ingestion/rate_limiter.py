@@ -1,8 +1,11 @@
 import asyncio
 import time
 import random
+import logging
 import httpx
 from typing import Callable, Any
+
+logger = logging.getLogger("mitsu.ingestion.rate_limiter")
 
 class RateLimitError(Exception):
     def __init__(self, retry_after=None):
@@ -52,6 +55,6 @@ async def fetch_with_retry(bucket: TokenBucket, fetch_fn: Callable[..., Any], *a
             jitter = random.uniform(0, 1)
             retry_after_val = float(getattr(e, "retry_after", 0) or 0)
             delay = max(base_delay + jitter, retry_after_val)
-            print(f"[RateLimiter] Exception ({e}). Retrying attempt {attempt + 1}/{max_retries} in {delay:.2f}s...")
+            logger.warning("[RateLimiter] Exception (%s). Retrying attempt %d/%d in %.2fs...", e, attempt + 1, max_retries, delay)
             await asyncio.sleep(delay)
     raise RuntimeError(f"Exceeded retries for {fetch_fn.__name__}")

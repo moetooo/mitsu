@@ -1,7 +1,10 @@
 import json
+import logging
 from groq import AsyncGroq
 from ..config import settings
 from typing import List, Dict, Any
+
+logger = logging.getLogger("mitsu.llm")
 
 client = AsyncGroq(api_key=settings.GROQ_API_KEY) if settings.GROQ_API_KEY else None
 
@@ -59,5 +62,5 @@ async def generate_reasoning(query: str, candidates: List[Dict[str, Any]]) -> Di
                     
         return reasoning_map
     except Exception as e:
-        print(f"LLM Reasoning error: {e}")
+        logger.warning("LLM Reasoning generation failed: %s", e)
         return {}
