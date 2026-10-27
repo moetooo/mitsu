@@ -11,7 +11,10 @@ from ..services.retrieval import retrieve_similar_manga
 from ..services.cache import get_cached, set_cached
 
 import random
+import logging
 from datetime import datetime, timezone
+
+logger = logging.getLogger("mitsu.manga")
 
 router = APIRouter()
 
@@ -162,83 +165,93 @@ async def get_trending_manga(
 
     trending_results: List[RecommendationResult] = []
 
-    # Attempt to fetch live trending from AniList GraphQL API
-    try:
-        query = """
-        query ($page: Int, $perPage: Int, $countryOfOrigin: String, $genre: String) {
-          Page(page: $page, perPage: $perPage) {
-            media(type: MANGA, sort: TRENDING_DESC, countryOfOrigin: $countryOfOrigin, genre: $genre) {
-              id
-              idMal
-              title { romaji english native }
-              description(asHtml: false)
-              genres
-              tags { name rank }
-              status
-              startDate { year }
-              chapters
-              volumes
-              averageScore
-              popularity
-              coverImage { extraLarge large }
-              bannerImage
-              siteUrl
+    # Check if AniList circuit breaker is currently open (cooldown active from recent failure)
+    anilist_circuit_open = await get_cached("manga:anilist_circuit_open")
+    from_db_fallback = False
+
+    if not anilist_circuit_open:
+        # Attempt to fetch live trending from AniList GraphQL API with snappy 2.5s timeout
+        try:
+            query = """
+            query ($page: Int, $perPage: Int, $countryOfOrigin: String, $genre: String) {
+              Page(page: $page, perPage: $perPage) {
+                media(type: MANGA, sort: TRENDING_DESC, countryOfOrigin: $countryOfOrigin, genre: $genre) {
+                  id
+                  idMal
+                  title { romaji english native }
+                  description(asHtml: false)
+                  genres
+                  tags { name rank }
+                  status
+                  startDate { year }
+                  chapters
+                  volumes
+                  averageScore
+                  popularity
+                  coverImage { extraLarge large }
+                  bannerImage
+                  siteUrl
+                }
+              }
             }
-          }
-        }
-        """
-        variables: Dict[str, Any] = {"page": page, "perPage": limit}
-        if country_code:
-            variables["countryOfOrigin"] = country_code
-        if genre_clean:
-            low_g = genre_clean.lower()
-            if low_g in ['yaoi', 'bl', "boys' love"]:
-                variables["genre"] = "Boys' Love"
-            elif low_g in ['yuri', 'gl', "girls' love"]:
-                variables["genre"] = "Girls' Love"
-            else:
-                variables["genre"] = genre_clean
+            """
+            variables: Dict[str, Any] = {"page": page, "perPage": limit}
+            if country_code:
+                variables["countryOfOrigin"] = country_code
+            if genre_clean:
+                low_g = genre_clean.lower()
+                if low_g in ['yaoi', 'bl', "boys' love"]:
+                    variables["genre"] = "Boys' Love"
+                elif low_g in ['yuri', 'gl', "girls' love"]:
+                    variables["genre"] = "Girls' Love"
+                else:
+                    variables["genre"] = genre_clean
 
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            resp = await client.post("https://graphql.anilist.co", json={"query": query, "variables": variables})
-            if resp.status_code == 200:
-                data = resp.json()
-                media_list = data.get("data", {}).get("Page", {}).get("media", [])
-                
-                for item in media_list:
-                    t = item.get("title", {})
-                    title_str = t.get("english") or t.get("romaji") or t.get("native") or "Unknown Title"
-                    cover = item.get("coverImage", {})
-                    cover_url = cover.get("extraLarge") or cover.get("large")
-                    synopsis_clean = item.get("description")
-                    if synopsis_clean:
-                        import re
-                        synopsis_clean = re.sub(r'<[^>]+>', '', synopsis_clean)
+            timeout = httpx.Timeout(2.5, connect=1.5)
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                resp = await client.post("https://graphql.anilist.co", json={"query": query, "variables": variables})
+                if resp.status_code == 200:
+                    data = resp.json()
+                    media_list = data.get("data", {}).get("Page", {}).get("media", [])
+                    
+                    for item in media_list:
+                        t = item.get("title", {})
+                        title_str = t.get("english") or t.get("romaji") or t.get("native") or "Unknown Title"
+                        cover = item.get("coverImage", {})
+                        cover_url = cover.get("extraLarge") or cover.get("large")
+                        synopsis_clean = item.get("description")
+                        if synopsis_clean:
+                            import re
+                            synopsis_clean = re.sub(r'<[^>]+>', '', synopsis_clean)
 
-                    trending_results.append(RecommendationResult(
-                        id=item.get("id"),
-                        anilist_id=item.get("id"),
-                        mal_id=item.get("idMal"),
-                        title=title_str,
-                        cover_image_url=cover_url,
-                        banner_image=item.get("bannerImage"),
-                        synopsis=synopsis_clean,
-                        genres=item.get("genres") or [],
-                        tags=item.get("tags") or [],
-                        status=item.get("status"),
-                        start_year=item.get("startDate", {}).get("year") if item.get("startDate") else None,
-                        chapters=item.get("chapters"),
-                        volumes=item.get("volumes"),
-                        average_score=item.get("averageScore"),
-                        similarity_score=None,
-                        llm_reasoning=None
-                    ))
-    except Exception as e:
-        # Fallback to DB if network / AniList API is unreachable
-        pass
+                        trending_results.append(RecommendationResult(
+                            id=item.get("id"),
+                            anilist_id=item.get("id"),
+                            mal_id=item.get("idMal"),
+                            title=title_str,
+                            cover_image_url=cover_url,
+                            banner_image=item.get("bannerImage"),
+                            synopsis=synopsis_clean,
+                            genres=item.get("genres") or [],
+                            tags=item.get("tags") or [],
+                            status=item.get("status"),
+                            start_year=item.get("startDate", {}).get("year") if item.get("startDate") else None,
+                            chapters=item.get("chapters"),
+                            volumes=item.get("volumes"),
+                            average_score=item.get("averageScore"),
+                            similarity_score=None,
+                            llm_reasoning=None
+                        ))
+                elif resp.status_code in (429, 500, 502, 503, 504):
+                    logger.warning("AniList API returned %d. Tripping circuit breaker for 60s.", resp.status_code)
+                    await set_cached("manga:anilist_circuit_open", True, ttl=60)
+        except Exception as e:
+            logger.warning("AniList trending fetch failed (%s). Tripping circuit breaker for 60s and using fast DB fallback.", e)
+            await set_cached("manga:anilist_circuit_open", True, ttl=60)
 
     # If AniList request failed or returned empty results, query local database
     if not trending_results:
+        from_db_fallback = True
         from sqlalchemy import text as sa_text
         where_clauses: List[Any] = [
             Manga.cover_image_url.isnot(None),
@@ -269,7 +282,10 @@ async def get_trending_manga(
             select(Manga)
             .options(defer(Manga.embedding))
             .where(*where_clauses)
-            .order_by((Manga.popularity * Manga.average_score).desc().nullslast())
+            .order_by(
+                (func.coalesce(Manga.popularity, 0) * func.coalesce(Manga.average_score, 0)).desc(),
+                Manga.average_score.desc().nullslast()
+            )
             .offset(offset)
             .limit(limit)
         )
@@ -297,7 +313,9 @@ async def get_trending_manga(
             ) for m in mangas
         ]
 
-    await set_cached(cache_key, [r.model_dump() for r in trending_results], ttl=14400)
+    # Live AniList cached for 4 hours; fast DB fallback cached for 15 mins to retry AniList soon
+    cache_ttl = 900 if from_db_fallback else 14400
+    await set_cached(cache_key, [r.model_dump() for r in trending_results], ttl=cache_ttl)
     return trending_results
 
 @router.get("/manga/{manga_id}", response_model=MangaDetail)
