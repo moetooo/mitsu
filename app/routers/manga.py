@@ -281,8 +281,11 @@ async def get_trending_manga(
         from_db_fallback = True
         where_clauses: List[Any] = [
             Manga.cover_image_url.isnot(None),
-            (Manga.start_year >= 2020) | (Manga.status == "RELEASING")
         ]
+
+        # Prefer partition pruning: constrain start_year when possible; also include releasing titles
+        year_clause = (Manga.start_year >= 2020) | ((Manga.status == "RELEASING") & Manga.start_year.isnot(None))
+        where_clauses.append(year_clause)
 
         if fmt and fmt != "all":
             from ..services.retrieval import build_format_sql_condition
@@ -304,14 +307,15 @@ async def get_trending_manga(
                 safe_genre = genre_clean.replace("'", "''")
                 where_clauses.append(sa_text(f"(genres @> ARRAY['{safe_genre}'] OR tags::text ILIKE '%{safe_genre}%')"))
 
-        offset = (page - 1) * limit
+        offset = max(0, (page - 1) * limit)
         stmt = (
             select(Manga)
             .options(defer(Manga.embedding))
             .where(*where_clauses)
             .order_by(
                 (func.coalesce(Manga.popularity, 0) * func.coalesce(Manga.average_score, 0)).desc(),
-                Manga.average_score.desc().nullslast()
+                Manga.average_score.desc().nullslast(),
+                Manga.popularity.desc().nullslast()
             )
             .offset(offset)
             .limit(limit)
