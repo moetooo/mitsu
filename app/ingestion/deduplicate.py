@@ -1,10 +1,14 @@
 import asyncio
+import logging
 from sqlalchemy import select, func, or_
 from ..db import AsyncSessionLocal
 from ..db_models import Manga
 
+logger = logging.getLogger("mitsu.ingestion.deduplicate")
+
+
 async def run_deduplication():
-    print("[Deduplication] Scanning database for duplicate entries...")
+    logger.info("[Deduplication] Scanning database for duplicate entries...")
     async with AsyncSessionLocal() as session:
         # Fetch all records
         res = await session.execute(select(Manga).order_by(Manga.id))
@@ -48,7 +52,7 @@ async def run_deduplication():
                     mangadex_map[m.mangadex_id] = m
 
         await session.commit()
-        print(f"[Deduplication] Merged and cleaned {merged_count} duplicate records.")
+        logger.info("[Deduplication] Merged and cleaned %d duplicate records.", merged_count)
 
 if __name__ == "__main__":
     asyncio.run(run_deduplication())
