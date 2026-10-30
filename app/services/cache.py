@@ -20,14 +20,14 @@ async def get_cached(key: str) -> Optional[Any]:
         if val:
             return json.loads(val)
     except Exception as e:
-        logger.warning("Redis get error for key '%s': %s", key, e)
+        logger.warning("Redis get error for key '%s': %s", key, e, exc_info=True)
     return None
 
 async def set_cached(key: str, data: Any, ttl: int = 3600):
     try:
         await redis_client.set(key, json.dumps(data), ex=ttl)
     except Exception as e:
-        logger.warning("Redis set error for key '%s': %s", key, e)
+        logger.warning("Redis set error for key '%s': %s", key, e, exc_info=True)
 
 # ==========================================
 # ROULETTE REDIS CANDIDATE POOL SYSTEM
