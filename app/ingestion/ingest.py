@@ -1,4 +1,5 @@
 import asyncio
+import logging
 # pyrefly: ignore [missing-import]
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import insert
@@ -7,6 +8,8 @@ from .normalize import anilist_to_record
 from ..db import AsyncSessionLocal, engine, Base
 from ..db_models import Manga
 from ..services.embedding import generate_embedding
+
+logger = logging.getLogger("mitsu.ingestion.ingest")
 
 async def init_db():
     async with engine.begin() as conn:
@@ -45,10 +48,10 @@ async def run_ingestion(start_year: int = 2000, end_year: int = datetime.now().y
     
     async with AsyncSessionLocal() as session:
         existing_ids = await get_existing_anilist_ids(session)
-        print(f"Database currently contains {len(existing_ids)} AniList manga.", flush=True)
+        logger.info("Database currently contains %d AniList manga.", len(existing_ids))
 
         for year in range(start_year, end_year + 1):
-            print(f"\n==================== Ingesting Year {year} ====================", flush=True)
+            logger.info("==================== Ingesting Year %d ====================", year)
             # Filter specifically for startDate in `year`
             start_date_greater = (year - 1) * 10000 + 1231  # e.g. 19991231 for 2000
             start_date_lesser = (year + 1) * 10000 + 101    # e.g. 20010101 for 2000
@@ -65,7 +68,7 @@ async def run_ingestion(start_year: int = 2000, end_year: int = datetime.now().y
                         start_date_lesser=start_date_lesser
                     )
                 except Exception as e:
-                    print(f"Error fetching year {year} page {page}: {e}. Moving to next year.", flush=True)
+                    logger.error("Error fetching year %d page %d: %s. Moving to next year.", year, page, e, exc_info=True)
                     break
                 
                 items = data.get("media", [])
@@ -84,7 +87,7 @@ async def run_ingestion(start_year: int = 2000, end_year: int = datetime.now().y
                         record['embedding'] = await generate_embedding(text_to_embed)
                         return record
                     except Exception as err:
-                        print(f"  [Warning] Error embedding manga ID {anilist_id}: {err}", flush=True)
+                        logger.warning("  [Warning] Error embedding manga ID %s: %s", anilist_id, err, exc_info=True)
                         return None
 
                 tasks = [process_raw(raw) for raw in items]
@@ -98,10 +101,10 @@ async def run_ingestion(start_year: int = 2000, end_year: int = datetime.now().y
                             existing_ids.add(record['anilist_id'])
                             new_count += 1
                         except Exception as err:
-                            print(f"  [Warning] Error DB upsert for manga ID {record.get('anilist_id')}: {err}", flush=True)
+                            logger.warning("  [Warning] Error DB upsert for manga ID %s: %s", record.get('anilist_id'), err, exc_info=True)
 
                 await session.commit()
-                print(f"[{year}] Page {page}: Ingested {new_count} new entries (Total in DB: {len(existing_ids)})", flush=True)
+                logger.info("[%d] Page %d: Ingested %d new entries (Total in DB: %d)", year, page, new_count, len(existing_ids))
 
                 if not data.get("pageInfo", {}).get("hasNextPage"):
                     break

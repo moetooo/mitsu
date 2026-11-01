@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from sqlalchemy.dialects.postgresql import insert
 from ..db import AsyncSessionLocal
 from ..db_models import DiscoveryQueue
@@ -8,19 +9,21 @@ from datetime import datetime
 from sqlalchemy import select
 from ..db_models import Manga
 
+logger = logging.getLogger("mitsu.ingestion.discovery")
+
 async def get_existing_mangadex_ids(session):
     res_md = await session.execute(select(Manga.mangadex_id).where(Manga.mangadex_id.isnot(None)))
     return set(res_md.scalars().all())
 
 async def discover_mangadex(start_year: int = 2000, end_year: int = datetime.now().year, max_batches_per_year: int = 5):
-    print(f"Starting MangaDex discovery ({start_year} - {end_year})...", flush=True)
+    logger.info("Starting MangaDex discovery (%d - %d)...", start_year, end_year)
     limit = 100
     async with AsyncSessionLocal() as session:
         existing_mangadex_ids = await get_existing_mangadex_ids(session)
-        print(f"[MangaDex Discovery] Found {len(existing_mangadex_ids)} existing MangaDex IDs in database.", flush=True)
+        logger.info("[MangaDex Discovery] Found %d existing MangaDex IDs in database.", len(existing_mangadex_ids))
 
         for year in range(start_year, end_year + 1):
-            print(f"[MangaDex Discovery] Processing year {year}...", flush=True)
+            logger.info("[MangaDex Discovery] Processing year %d...", year)
             for i in range(max_batches_per_year):
                 offset = i * limit
                 try:
@@ -52,13 +55,13 @@ async def discover_mangadex(start_year: int = 2000, end_year: int = datetime.now
                         inserted += 1
 
                     await session.commit()
-                    print(f"  [{year}] Offset {offset}: Processed {len(items)} items ({inserted} new queued).", flush=True)
+                    logger.info("  [%d] Offset %d: Processed %d items (%d new queued).", year, offset, len(items), inserted)
                     
                     total = res.get("total", 0)
                     if offset + limit >= total:
                         break
                 except Exception as e:
-                    print(f"  [{year}] Error at offset {offset}: {e}", flush=True)
+                    logger.error("  [%d] Error at offset %d: %s", year, offset, e, exc_info=True)
                     break
 
 async def run_discovery(start_year: int = 2000, end_year: int = datetime.now().year):

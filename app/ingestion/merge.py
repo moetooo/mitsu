@@ -1,9 +1,12 @@
 import asyncio
+import logging
 from collections import defaultdict
 from difflib import SequenceMatcher
 from sqlalchemy import select, delete
 from ..db import AsyncSessionLocal
 from ..db_models import Manga
+
+logger = logging.getLogger("mitsu.ingestion.merge")
 
 def similarity_ratio(a: str, b: str) -> float:
     if not a or not b:
@@ -19,7 +22,7 @@ def clean_title(t: str) -> str:
     return t.lower().strip()
 
 async def run_merge_pass():
-    print("[Merge Pass] Starting fast cross-source deduplication...", flush=True)
+    logger.info("[Merge Pass] Starting fast cross-source deduplication...")
     async with AsyncSessionLocal() as session:
         # 1. Load lightweight tuples (excluding heavy embedding vectors)
         stmt = select(
@@ -33,7 +36,7 @@ async def run_merge_pass():
         )
         res = await session.execute(stmt)
         rows = res.all()
-        print(f"[Merge Pass] Loaded {len(rows)} lightweight records.", flush=True)
+        logger.info("[Merge Pass] Loaded %d lightweight records.", len(rows))
 
         # 2. Fast mal_id matching
         mal_map = {}
@@ -54,7 +57,7 @@ async def run_merge_pass():
         if to_delete:
             await session.execute(delete(Manga).where(Manga.id.in_(list(to_delete))))
             await session.commit()
-        print(f"[Merge Pass] Linked & merged {linked_mal} entries via mal_id matching.", flush=True)
+        logger.info("[Merge Pass] Linked & merged %d entries via mal_id matching.", linked_mal)
 
         # 3. Reload lightweight tuples
         res = await session.execute(stmt)
@@ -81,7 +84,7 @@ async def run_merge_pass():
         if exact_to_delete:
             await session.execute(delete(Manga).where(Manga.id.in_(list(exact_to_delete))))
             await session.commit()
-        print(f"[Merge Pass] Linked & merged {exact_linked} entries via exact title+year matching.", flush=True)
+        logger.info("[Merge Pass] Linked & merged %d entries via exact title+year matching.", exact_linked)
 
         # 5. Year-bucketed Fast Fuzzy Title Matching
         res = await session.execute(stmt)
@@ -96,7 +99,7 @@ async def run_merge_pass():
         fuzzy_to_delete = set()
         fuzzy_linked = 0
         sorted_years = sorted(year_buckets.keys())
-        print(f"[Merge Pass] Running fast fuzzy comparison across {len(sorted_years)} years...", flush=True)
+        logger.info("[Merge Pass] Running fast fuzzy comparison across %d years...", len(sorted_years))
 
         for year in sorted_years:
             items = year_buckets[year]
@@ -127,12 +130,12 @@ async def run_merge_pass():
 
             fuzzy_linked += year_linked
             if year_linked > 0:
-                print(f"  [{year}] Found & merged {year_linked} fuzzy duplicates (Total merged so far: {fuzzy_linked})", flush=True)
+                logger.info("  [%d] Found & merged %d fuzzy duplicates (Total merged so far: %d)", year, year_linked, fuzzy_linked)
 
         if fuzzy_to_delete:
             await session.execute(delete(Manga).where(Manga.id.in_(list(fuzzy_to_delete))))
             await session.commit()
-        print(f"[Merge Pass] Done! Linked & merged {fuzzy_linked} total entries via fuzzy title matching.", flush=True)
+        logger.info("[Merge Pass] Done! Linked & merged %d total entries via fuzzy title matching.", fuzzy_linked)
 
 if __name__ == "__main__":
     asyncio.run(run_merge_pass())
