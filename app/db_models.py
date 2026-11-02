@@ -80,4 +80,30 @@ Index(
     postgresql_ops={'embedding': 'vector_cosine_ops'}
 )
 
+# --- P1 database optimization: covering / partial indexes for hot query paths ---
+# Filter combinations used by search + roulette (status + year slice).
+Index('idx_manga_status_year', Manga.status, Manga.start_year)
+# Ranking / min_score filters.
+Index('idx_manga_score_popularity', Manga.average_score.desc(), Manga.popularity.desc())
+Index('idx_manga_year_score', Manga.start_year, Manga.average_score.desc())
+Index('idx_manga_chapters', Manga.chapters)
+Index('idx_manga_updated_at', Manga.updated_at)
+# Roulette always requires a cover image; a partial index keeps it small.
+Index(
+    'idx_manga_cover_notnull',
+    Manga.id,
+    postgresql_where=text('cover_image_url IS NOT NULL'),
+)
 
+# Graph traversal from a seed manga (reverse edges).
+Index('idx_reco_edges_to', RecommendationsEdge.manga_id_to)
+Index('idx_reco_edges_votes', RecommendationsEdge.vote_count.desc())
+
+# Enrichment workers poll pending rows by source.
+Index(
+    'idx_discovery_queue_pending',
+    DiscoveryQueue.source,
+    DiscoveryQueue.discovered_at,
+    postgresql_where=text('enriched = false'),
+)
+Index('idx_discovery_queue_external', DiscoveryQueue.external_id)

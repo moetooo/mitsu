@@ -6,7 +6,7 @@ services:
       POSTGRES_PASSWORD: password
       POSTGRES_DB: mangamind
     ports:
-      - "5432:5432"
+      - "5433:5432"
     shm_size: '1gb'
     volumes:
       - postgres_data:/var/lib/postgresql/data
@@ -16,5 +16,8 @@ services:
     ports:
       - "6379:6379"
 
+
 volumes:
   postgres_data:
+    external: true
+    name: recommend_tool_postgres_data

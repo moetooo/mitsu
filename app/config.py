@@ -13,6 +13,15 @@ class Settings(BaseSettings):
     ENABLE_INFERRED_TAG_RANKING: bool = os.getenv("ENABLE_INFERRED_TAG_RANKING", "false").lower() in ("true", "1", "yes")
     INFERRED_TAG_BOOST: float = float(os.getenv("INFERRED_TAG_BOOST", "0.10"))
 
+    # --- Database / query tuning (P1 optimization) ---
+    DB_POOL_SIZE: int = int(os.getenv("DB_POOL_SIZE", "15"))
+    DB_MAX_OVERFLOW: int = int(os.getenv("DB_MAX_OVERFLOW", "20"))
+    DB_POOL_RECYCLE_S: int = int(os.getenv("DB_POOL_RECYCLE_S", "1800"))
+    DB_STATEMENT_TIMEOUT_MS: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "15000"))
+    DB_COMMAND_TIMEOUT_S: float = float(os.getenv("DB_COMMAND_TIMEOUT_S", "20"))
+    HNSW_EF_SEARCH: int = int(os.getenv("HNSW_EF_SEARCH", "200"))
+    DB_ENABLE_HNSW_FALLBACK: bool = os.getenv("DB_ENABLE_HNSW_FALLBACK", "true").lower() in ("true", "1", "yes")
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 settings = Settings()
