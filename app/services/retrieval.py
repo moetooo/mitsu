@@ -142,35 +142,86 @@ def generate_filter_hash(filters: Optional[RecommendFilters]) -> str:
     filter_str = json.dumps(filter_dict, sort_keys=True)
     return hashlib.md5(filter_str.encode()).hexdigest()[:12]
 
-def build_genre_sql_condition(genres_list: List[str], exclude: bool = False) -> Optional[str]:
-    """Builds an exhaustive SQL condition across PostgreSQL text array genres and JSONB tags"""
+def _sql_literal(value: str) -> str:
+    return value.replace("'", "''")
+
+
+def _tag_json_condition(tag_name: str, key: str, params: Optional[Dict[str, Any]]) -> str:
+    """JSONB containment on tags; bound as a parameter when params is given."""
+    if params is None:
+        return "tags @> '[{\"name\": \"" + _sql_literal(tag_name) + "\"}]'"
+    params[key] = json.dumps([{"name": tag_name}])
+    return "tags @> CAST(:" + key + " AS jsonb)"
+
+
+def _array_contains_condition(value: str, key: str, params: Optional[Dict[str, Any]]) -> str:
+    """genres @> ARRAY[...] containment; bound as a parameter when params is given."""
+    if params is None:
+        return "genres @> ARRAY['" + _sql_literal(value) + "']"
+    params[key] = [value]
+    return "genres @> CAST(:" + key + " AS text[])"
+
+
+def build_genre_sql_condition(
+    genres_list: Optional[List[str]],
+    exclude: bool = False,
+    params: Optional[Dict[str, Any]] = None
+) -> Optional[str]:
+    """Builds an exhaustive SQL condition across PostgreSQL text array genres and JSONB tags.
+
+    When params is supplied, every user-provided genre is emitted as a bind
+    parameter so the statement text stays constant across requests and can be
+    planned and cached by PostgreSQL. Without params the legacy inline form is
+    produced (used by unit tests).
+    """
     if not genres_list:
         return None
-    conditions = []
-    for g in genres_list:
-        escaped = g.replace("'", "''")
-        low = g.lower()
-        if low in ['yaoi', 'bl', "boys' love"]:
-            conditions.append("(genres @> ARRAY['Boys'' Love'] OR tags @> '[{\"name\": \"Boys'' Love\"}]' OR tags @> '[{\"name\": \"Yaoi\"}]')")
-        elif low in ['yuri', 'gl', "girls' love"]:
-            conditions.append("(genres @> ARRAY['Girls'' Love'] OR tags @> '[{\"name\": \"Girls'' Love\"}]' OR tags @> '[{\"name\": \"Yuri\"}]')")
-        elif low in ['shoujo ai', 'shoujo-ai']:
-            conditions.append("(tags @> '[{\"name\": \"Shoujo Ai\"}]' OR tags @> '[{\"name\": \"Girls'' Love\"}]' OR tags @> '[{\"name\": \"Yuri\"}]')")
-        elif low in ['shounen ai', 'shounen-ai']:
-            conditions.append("(tags @> '[{\"name\": \"Shounen Ai\"}]' OR tags @> '[{\"name\": \"Boys'' Love\"}]' OR tags @> '[{\"name\": \"Yaoi\"}]')")
-        elif low in ['shounen', 'shoujo', 'seinen', 'josei']:
-            conditions.append(f"tags @> '[{{\"name\": \"{escaped}\"}}]'")
-        elif low in ['harem', 'reverse harem', 'love triangle']:
-            conditions.append(f"tags @> '[{{\"name\": \"{escaped}\"}}]'")
+
+    conditions: List[str] = []
+    for idx, genre in enumerate(genres_list):
+        if not isinstance(genre, str) or not genre.strip():
+            continue
+        low = genre.lower().strip()
+        key = "genre_" + str(idx)
+
+        if low in ("yaoi", "bl", "boys' love"):
+            conditions.append("(" + " OR ".join([
+                _array_contains_condition("Boys' Love", key + "_arr", params),
+                _tag_json_condition("Boys' Love", key + "_t1", params),
+                _tag_json_condition("Yaoi", key + "_t2", params),
+            ]) + ")")
+        elif low in ("yuri", "gl", "girls' love"):
+            conditions.append("(" + " OR ".join([
+                _array_contains_condition("Girls' Love", key + "_arr", params),
+                _tag_json_condition("Girls' Love", key + "_t1", params),
+                _tag_json_condition("Yuri", key + "_t2", params),
+            ]) + ")")
+        elif low in ("shoujo ai", "shoujo-ai"):
+            conditions.append("(" + " OR ".join([
+                _tag_json_condition("Shoujo Ai", key + "_t1", params),
+                _tag_json_condition("Girls' Love", key + "_t2", params),
+                _tag_json_condition("Yuri", key + "_t3", params),
+            ]) + ")")
+        elif low in ("shounen ai", "shounen-ai"):
+            conditions.append("(" + " OR ".join([
+                _tag_json_condition("Shounen Ai", key + "_t1", params),
+                _tag_json_condition("Boys' Love", key + "_t2", params),
+                _tag_json_condition("Yaoi", key + "_t3", params),
+            ]) + ")")
+        elif low in ("shounen", "shoujo", "seinen", "josei", "harem", "reverse harem", "love triangle"):
+            conditions.append(_tag_json_condition(genre, key + "_tag", params))
         else:
-            conditions.append(f"(genres @> ARRAY['{escaped}'] OR tags @> '[{{\"name\": \"{escaped}\"}}]')")
+            conditions.append("(" + " OR ".join([
+                _array_contains_condition(genre, key + "_arr", params),
+                _tag_json_condition(genre, key + "_tag", params),
+            ]) + ")")
 
     if not conditions:
         return None
     combined = " OR ".join(conditions)
     if exclude:
-        return f"NOT ({combined})"
-    return f"({combined})"
+        return "NOT (" + combined + ")"
+    return "(" + combined + ")"
 
 def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
     """Builds an accurate SQL condition distinguishing Japanese Manga from Korean Manhwa and Chinese Manhua."""
@@ -282,12 +333,12 @@ def apply_filter_criteria(
         where_clauses.append("chapters <= :max_chapters")
 
     if filters.genres:
-        cond = build_genre_sql_condition(filters.genres, exclude=False)
+        cond = build_genre_sql_condition(filters.genres, exclude=False, params=params)
         if cond:
             where_clauses.append(cond)
 
     if filters.exclude_genres:
-        cond = build_genre_sql_condition(filters.exclude_genres, exclude=True)
+        cond = build_genre_sql_condition(filters.exclude_genres, exclude=True, params=params)
         if cond:
             where_clauses.append(cond)
 
@@ -369,7 +420,11 @@ async def find_matched_title(
             LOWER(title_english) = :q 
             OR LOWER(title_romaji) = :q
             OR LOWER(COALESCE(title_native, '')) = :q
-            OR :q = ANY(SELECT LOWER(t) FROM unnest(COALESCE(alternative_titles, '{}')) AS t)
+            OR EXISTS (
+                SELECT 1
+                FROM unnest(COALESCE(alternative_titles, '{}')) AS alt(t)
+                WHERE LOWER(t) = :q
+            )
         )
           AND embedding IS NOT NULL
         ORDER BY popularity DESC NULLS LAST
@@ -383,8 +438,11 @@ async def find_matched_title(
             pass
 
     # 2. Fast Trigram / word similarity match using GIN indexes
-    await session.execute(text("SET pg_trgm.word_similarity_threshold = 0.40;"))
-    await session.execute(text("SET pg_trgm.similarity_threshold = 0.30;"))
+    # One round-trip and transaction-local, so pooled connections never inherit these.
+    await session.execute(text(
+        "SELECT set_config('pg_trgm.word_similarity_threshold', '0.40', true), "
+        "set_config('pg_trgm.similarity_threshold', '0.30', true);"
+    ))
     res = await session.execute(text("""
         SELECT id, title_english, title_romaji, embedding::real[], popularity,
                GREATEST(similarity(:q, LOWER(COALESCE(title_english, ''))), similarity(:q, LOWER(COALESCE(title_romaji, '')))) as sim,
@@ -431,14 +489,14 @@ async def retrieve_similar_manga(
     
     where_clauses = ["embedding IS NOT NULL"]
     params: Dict[str, Any] = {"emb": emb_str, "limit": limit, "offset": offset}
-    
+
     if isinstance(filters, dict):
         filters = RecommendFilters(**filters)
 
     allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
     if not allow_nsfw:
         where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")
-    
+
     apply_filter_criteria(filters, where_clauses, params)
 
     where_str = " AND ".join(where_clauses)
@@ -498,42 +556,98 @@ async def retrieve_similar_manga(
     if relevance_conditions:
         where_filter_sql = "WHERE " + " AND ".join(relevance_conditions)
 
+    # ------------------------------------------------------------------
+    # ANN-first retrieval.
+    # ORDER BY distance + LIMIT is what lets the planner use
+    # idx_manga_embedding_hnsw. Ranking and dedup then run on a bounded
+    # candidate pool instead of scanning the whole partitioned table.
+    # ------------------------------------------------------------------
+    pool_limit = max(200, (offset + limit) * 15)
+    pool_limit = min(pool_limit, max(10, settings.HNSW_EF_SEARCH))
+    params["pool_limit"] = pool_limit
+
+    pool_columns = """
+            id, anilist_id, mal_id, mangadex_id,
+            title_romaji, title_english, title_native,
+            synopsis, genres, tags, inferred_tags, status, start_year,
+            chapters, volumes, average_score, popularity,
+            cover_image_url, banner_image, site_url, alternative_titles
+    """
+
+    cte_sql = f"""vector_pool AS (
+          SELECT {pool_columns},
+                 (1 - (embedding <=> CAST(:emb AS vector))) AS sim
+          FROM manga
+          WHERE {where_str}
+          ORDER BY embedding <=> CAST(:emb AS vector)
+          LIMIT :pool_limit
+        )"""
+
+    if clean_q:
+        params["title_limit"] = max(50, limit * 5)
+        cte_sql += f""",
+        title_pool AS (
+          SELECT {pool_columns},
+                 (1 - (embedding <=> CAST(:emb AS vector))) AS sim
+          FROM manga
+          WHERE {where_str}
+            AND (
+              LOWER(COALESCE(title_english, '')) LIKE :contain_q
+              OR LOWER(COALESCE(title_romaji, '')) LIKE :contain_q
+              OR LOWER(COALESCE(title_native, '')) LIKE :contain_q
+            )
+          ORDER BY (1 - (embedding <=> CAST(:emb AS vector))) DESC
+          LIMIT :title_limit
+        )"""
+
+    union_clause = "\n          UNION\n          SELECT * FROM title_pool" if clean_q else ""
+    tag_select_final = tag_select_sql.rstrip().rstrip(",")
+
+    cte_sql += f""",
+        candidates AS (
+          SELECT * FROM vector_pool{union_clause}
+        ),
+        ranked AS (
+          SELECT *,
+            {title_boost_select}
+            {tag_select_final},
+            ROW_NUMBER() OVER (
+              PARTITION BY LOWER(COALESCE(title_english, title_romaji, id::text))
+              ORDER BY sim DESC, popularity DESC NULLS LAST
+            ) as rn
+          FROM candidates
+        ),
+        scored AS (
+          SELECT *,
+            {score_calc}
+          FROM ranked
+          WHERE rn = 1
+        )"""
+
     sql = text(f"""
+        WITH {cte_sql}
+        SELECT *
+        FROM scored
+        {where_filter_sql}
+        ORDER BY hybrid_score DESC, id ASC
+        LIMIT :limit OFFSET :offset;
+    """)
+
+    legacy_sql = text(f"""
         WITH ranked AS (
-          SELECT 
-            id, 
-            anilist_id,
-            mal_id,
-            mangadex_id,
-            title_romaji, 
-            title_english, 
-            title_native,
-            synopsis, 
-            genres, 
-            tags, 
-            inferred_tags,
-            status,
-            start_year, 
-            chapters,
-            volumes,
-            average_score, 
-            popularity, 
-            cover_image_url, 
-            banner_image,
-            site_url,
+          SELECT {pool_columns},
             (1 - (embedding <=> CAST(:emb AS vector))) as sim,
             {title_boost_select}
-            {tag_select_sql}
+            {tag_select_final},
             ROW_NUMBER() OVER (
-              PARTITION BY LOWER(COALESCE(title_english, title_romaji, id::text)) 
+              PARTITION BY LOWER(COALESCE(title_english, title_romaji, id::text))
               ORDER BY (1 - (embedding <=> CAST(:emb AS vector))) DESC, popularity DESC NULLS LAST
             ) as rn
           FROM manga
           WHERE {where_str}
         ),
         scored AS (
-          SELECT *,
-            {score_calc}
+          SELECT *, {score_calc}
           FROM ranked
           WHERE rn = 1
         )
@@ -546,6 +660,15 @@ async def retrieve_similar_manga(
 
     result = await session.execute(sql, params)
     rows = result.all()
+
+    # Selective SQL filters can shrink the ANN pool below the requested page.
+    # Re-run the exact (non-ANN) ordering only in that underfill case.
+    if filters is not None and len(rows) < max(1, limit) and settings.DB_ENABLE_HNSW_FALLBACK:
+        try:
+            result = await session.execute(legacy_sql, params)
+            rows = result.all()
+        except Exception:
+            pass
 
     candidates = []
     for r in rows:
@@ -706,32 +829,52 @@ async def sample_candidates_from_db(
     if not allow_nsfw:
         where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")
 
-    rand_offset = random.randint(0, 40)
     rand_seed = f"seed_{random.randint(1, 999999999)}_{time.time()}"
     params: Dict[str, Any] = {
-        "limit": sample_limit, 
-        "offset": rand_offset,
-        "seed": rand_seed
+        "limit": sample_limit,
+        "seed": rand_seed,
+        "rand_frac": random.random(),
     }
 
     apply_filter_criteria(filters, where_clauses, params)
 
     where_str = " AND ".join(where_clauses)
 
-    # Safe, uniform pseudo-random distribution via core PostgreSQL hashtext (0 overflow risk)
-    sql = text(f"""
-        SELECT 
+    columns = """
           id, anilist_id, mal_id, mangadex_id, title_romaji, title_english, title_native,
           synopsis, genres, tags, status, start_year, chapters, volumes,
-          average_score, popularity, cover_image_url, banner_image, site_url
-        FROM manga
-        WHERE {where_str}
-        ORDER BY hashtext(id::text || :seed) DESC
-        LIMIT :limit OFFSET :offset;
+          average_score, popularity, cover_image_url, banner_image, site_url"""
+
+    # Random PK slice instead of sorting every row with hashtext().
+    sql = text(f"""
+        WITH bounds AS (
+          SELECT COALESCE(MIN(id), 0) AS lo, COALESCE(MAX(id), 0) AS hi FROM manga
+        )
+        SELECT {columns}
+        FROM manga, bounds
+        WHERE id >= bounds.lo + FLOOR((bounds.hi - bounds.lo) * :rand_frac)::bigint
+          AND {where_str}
+        ORDER BY id ASC
+        LIMIT :limit;
     """)
 
     result = await session.execute(sql, params)
-    return list(result.all())
+    rows = list(result.all())
+
+    if len(rows) < max(1, sample_limit // 4):
+        fb = text(f"""
+            SELECT {columns}
+            FROM manga
+            WHERE {where_str}
+            ORDER BY hashtext(id::text || :seed) DESC
+            LIMIT :limit;
+        """)
+        result = await session.execute(fb, params)
+        rows = list(result.all())
+
+    random.shuffle(rows)
+    return rows
+
 
 
 async def refill_roulette_pool(filters: Optional[RecommendFilters], session_id: Optional[str] = None):
