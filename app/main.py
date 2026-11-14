@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from brotli_asgi import BrotliMiddleware
 from sqlalchemy import text
-from .routers import recommend, manga, search, admin
+from .routers import recommend, manga, search, admin, vocabulary
 from .middleware.rate_limit import RateLimitMiddleware
 from .services.embedding import generate_embedding, shutdown_embedding
 from .services.cache import redis_client
@@ -79,6 +79,7 @@ app.include_router(recommend.router, tags=["recommend"])
 app.include_router(manga.router, tags=["manga"])
 app.include_router(search.router, tags=["search"])
 app.include_router(admin.router, tags=["admin"])
+app.include_router(vocabulary.router, tags=["vocabulary"])
 
 # The dashboard is a separate Vite entry built into app/static/dashboard.
 # Assets are relative to /admin/dashboard, so a proxy prefix such as /api works.

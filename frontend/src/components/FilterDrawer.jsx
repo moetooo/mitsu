@@ -1,46 +1,6 @@
 import { useState, useMemo, useRef } from 'react';
 
-export const FILTER_CATEGORIES = [
-  {
-    id: 'core',
-    name: "Core Genres",
-    tagline: "Story Archetypes",
-    options: [
-      "Action", "Adventure", "Comedy", "Drama", "Fantasy", 
-      "Horror", "Mystery", "Psychological", "Sci-Fi", 
-      "Slice of Life", "Supernatural", "Thriller", "Tragedy"
-    ]
-  },
-  {
-    id: 'demographics',
-    name: "Demographics",
-    tagline: "Target Demographics",
-    options: [
-      "Shounen", "Shoujo", "Seinen", "Josei"
-    ]
-  },
-  {
-    id: 'romance',
-    name: "Romance & Relationships",
-    tagline: "Romance • BL • GL",
-    options: [
-      "Romance", "Boys' Love", "Girls' Love", "Harem", "Reverse Harem", 
-      "Love Triangle", "Ecchi"
-    ]
-  },
-  {
-    id: 'themes',
-    name: "Themes & Settings",
-    tagline: "Themes & Settings",
-    options: [
-      "Isekai", "Mecha", "Sports", "Historical", "Music", 
-      "School Life", "Reincarnation", "Martial Arts", "Super Power", 
-      "Survival", "Magic", "Crime", "Medical"
-    ]
-  }
-];
-
-const ALL_FILTER_OPTIONS = Array.from(new Set(FILTER_CATEGORIES.flatMap(c => c.options)));
+import { FALLBACK_GROUPS } from '../utils/vocabulary';
 
 /**
  * Single Range Slider for Chapters:
@@ -310,14 +270,25 @@ function DualRangeSliderPanel({ title, minVal, maxVal, absoluteMin, absoluteMax,
   );
 }
 
-export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onReset }) {
+export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onReset, categories = FALLBACK_GROUPS }) {
   const [activeCategoryTab, setActiveCategoryTab] = useState('all');
   const [tagQuery, setTagQuery] = useState('');
 
+  // FE-23: the groups come from the served vocabulary (App loads it once); the
+  // built-in list is only the offline fallback.
+  const filterCategories = useMemo(
+    () => (Array.isArray(categories) && categories.length > 0 ? categories : FALLBACK_GROUPS),
+    [categories]
+  );
+  const allFilterOptions = useMemo(
+    () => Array.from(new Set(filterCategories.flatMap(c => c.options))),
+    [filterCategories]
+  );
+
   const displayedCategories = useMemo(() => {
-    if (activeCategoryTab === 'all') return FILTER_CATEGORIES;
-    return FILTER_CATEGORIES.filter(c => c.id === activeCategoryTab);
-  }, [activeCategoryTab]);
+    if (activeCategoryTab === 'all') return filterCategories;
+    return filterCategories.filter(c => c.id === activeCategoryTab);
+  }, [activeCategoryTab, filterCategories]);
 
   const toggleGenre = (g, type) => {
     setFilters(prev => {
@@ -540,10 +511,10 @@ export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onR
             }`}
           >
             <span>All Categories</span>
-            <span className="text-[9px] opacity-75">({ALL_FILTER_OPTIONS.length})</span>
+            <span className="text-[9px] opacity-75">({allFilterOptions.length})</span>
           </button>
 
-          {FILTER_CATEGORIES.map(cat => {
+          {filterCategories.map(cat => {
             const catInc = cat.options.filter(o => (filters.genres || []).includes(o)).length;
             const catExc = cat.options.filter(o => (filters.exclude_genres || []).includes(o)).length;
             const catActive = catInc + catExc;

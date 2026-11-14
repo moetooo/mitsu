@@ -25,4 +25,6 @@ export const API_ROUTES = {
   recommend: `${API_BASE}/recommend`,
   roulette: `${API_BASE}/roulette`,
   rouletteBatch: `${API_BASE}/roulette/batch`,
+  // FE-23: the canonical genre/theme/format vocabulary the filters are built from.
+  vocabulary: `${API_BASE}/vocabulary`,
 };
