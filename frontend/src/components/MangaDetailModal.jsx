@@ -3,6 +3,7 @@ import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 import CoverFallback from './CoverFallback';
 import { API_ROUTES } from '../config';
+import { formatScore } from '../utils/scoreUtils';
 import useScrollLock from '../hooks/useScrollLock';
 import useEscapeLayer from '../hooks/useEscapeLayer';
 import useFocusTrap from '../hooks/useFocusTrap';
@@ -99,11 +100,6 @@ export default function MangaDetailModal({
     }
   }, [manga?.cover_image_url]);
 
-  // null as well as undefined means "no similarity was computed" (roulette
-  // reports null now); `null * 100` is 0, so it used to render a 0% match.
-  const matchPct = manga?.similarity_score === undefined || manga?.similarity_score === null
-    ? null
-    : Math.round(manga.similarity_score * 100);
   const activeHover = hoverBorderMap[hoverAccent] || hoverBorderMap.vermillion;
 
   // Feature 32: Detect Explicit NSFW content (Hentai / Erotica / Adult - excluding standard Ecchi)
@@ -177,7 +173,7 @@ export default function MangaDetailModal({
     
     fetchSimilar();
     return () => { isMounted = false; };
-  }, [manga]);
+  }, [manga, allowNsfw]);
 
   if (!manga) return null;
 
@@ -388,7 +384,7 @@ export default function MangaDetailModal({
                 )}
                 {manga.average_score && (
                   <span className="px-3 py-1 rounded-full bg-[var(--hanko-bg)] text-[var(--accent-vermillion)] border border-[var(--accent-vermillion)] font-bold">
-                    ★ {(manga.average_score / 10).toFixed(1)} / 10
+                    ★ {formatScore(manga.average_score)} / 10
                   </span>
                 )}
 

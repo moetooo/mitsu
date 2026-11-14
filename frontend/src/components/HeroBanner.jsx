@@ -1,7 +1,8 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import CoverFallback from './CoverFallback';
 import { API_ROUTES } from '../config';
+import { formatScore } from '../utils/scoreUtils';
 
 function HeroCoverThumbnail({ url, title }) {
   const isCached = isCoverCached(url);
@@ -94,25 +95,30 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
   const [currentIndex, setCurrentIndex] = useState(0);
   const [isPaused, setIsPaused] = useState(false);
   const [items, setItems] = useState(FALLBACK_BANNERS);
+  // Which result set the current mix was built from, so appended pages do not
+  // rebuild (and reshuffle) it.
+  const mixSignatureRef = useRef('');
 
   const shuffleArray = (arr) => [...arr].sort(() => 0.5 - Math.random());
 
   const processMixBannerItems = (rawItems) => {
     if (!rawItems || rawItems.length === 0) return FALLBACK_BANNERS;
 
-    // Categorize incoming search/grid items into diverse pools (Popular, Underrated, Acclaimed)
-    const popular = [];
-    const underrated = [];
+    // FE-21: the pools are built from the score alone. The old split read
+    // `item.popularity`, which `RecommendationResult` does not carry, so
+    // `pop` was always 0, every 80+ title landed in "underrated" and the
+    // acclaimed pool was unreachable -- the banner was not mixed at all.
     const acclaimed = [];
+    const solid = [];
+    const popular = [];
 
     rawItems.forEach(item => {
       const score = item.average_score || 0;
-      const pop = item.popularity || 0;
 
-      if (score >= 80 && (pop < 500 || !pop)) {
-        underrated.push(item);
-      } else if (score >= 85) {
+      if (score >= 85) {
         acclaimed.push(item);
+      } else if (score >= 70) {
+        solid.push(item);
       } else {
         popular.push(item);
       }
@@ -128,9 +134,9 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
       }
     };
 
-    // Pick 2 from underrated, 2 from acclaimed, 2 from popular
-    pick(underrated, 2);
+    // Pick 2 from each pool so the banner is not six copies of the same tier
     pick(acclaimed, 2);
+    pick(solid, 2);
     pick(popular, 2);
 
     // Fill up to 6 if any pool was short
@@ -149,9 +155,19 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
   // Fetch featured titles or process incoming search mangas into randomized mix
   useEffect(() => {
     if (mangas && mangas.length > 0) {
+      const signature = mangas.map(m => m.id).join(',');
+      const previous = mixSignatureRef.current;
+      if (previous && signature.startsWith(previous)) {
+        // Page N+1 of the same query: the mix already on screen stays, so the
+        // carousel neither reshuffles nor snaps back to slide 0 while the user
+        // is reading it.
+        return;
+      }
+      mixSignatureRef.current = signature;
       setItems(processMixBannerItems(mangas));
       setCurrentIndex(0);
     } else {
+      mixSignatureRef.current = '';
       fetch(API_ROUTES.featured)
         .then(res => res.json())
         .then(data => {
@@ -232,7 +248,7 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
             {current.start_year && <span>• {current.start_year}</span>}
             {current.average_score && (
               <span className="text-[var(--accent-vermillion)] font-bold ml-1">
-                ★ {(current.average_score / 10).toFixed(1)}
+                ★ {formatScore(current.average_score)}
               </span>
             )}
           </div>

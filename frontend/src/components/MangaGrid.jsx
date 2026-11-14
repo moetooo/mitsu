@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { List } from 'react-window';
 import MangaCard from './MangaCard';
-import SectionDivider from './SectionDivider';
 
 // Column classes never change, so they live at module scope: a fresh object here
 // would invalidate rowProps on every render.
@@ -24,11 +23,9 @@ function VirtualRow({
   isBookmarked,
   onCardClick,
   onToggleBookmark,
-  activeGridSize,
   stampStyle,
   hoverAccent,
   nsfwBlur,
-  onSelectAuthor,
   showMatchPct,
   showRank
 }) {
@@ -46,11 +43,9 @@ function VirtualRow({
                 onClick={onCardClick}
                 isBookmarked={isBookmarked(m.id)}
                 onToggleBookmark={onToggleBookmark}
-                gridSize={activeGridSize}
                 stampStyle={stampStyle}
                 hoverAccent={hoverAccent}
                 nsfwBlur={nsfwBlur}
-                onSelectAuthor={onSelectAuthor}
                 showMatchPct={showMatchPct}
                 rank={showRank ? (globalIdx + 1) : null}
               />
@@ -72,7 +67,6 @@ export default function MangaGrid({
   stampStyle = 'hanko',
   hoverAccent = 'vermillion',
   nsfwBlur = true,
-  onSelectAuthor = null,
   hasMore = false,
   onLoadMore = null,
   hasSearched = false,
@@ -154,14 +148,12 @@ export default function MangaGrid({
     isBookmarked,
     onCardClick,
     onToggleBookmark,
-    activeGridSize,
     stampStyle,
     hoverAccent,
     nsfwBlur,
-    onSelectAuthor,
     showMatchPct,
     showRank
-  }), [sortedMangas, columns, activeGridSize, isBookmarked, onCardClick, onToggleBookmark, stampStyle, hoverAccent, nsfwBlur, onSelectAuthor, showMatchPct, showRank]);
+  }), [sortedMangas, columns, isBookmarked, onCardClick, onToggleBookmark, stampStyle, hoverAccent, nsfwBlur, showMatchPct, showRank]);
 
   // Feature 149: Infinite Scroll with Load-More Sentinel
   const sentinelRef = useRef(null);
@@ -321,11 +313,9 @@ export default function MangaGrid({
                 onClick={onCardClick}
                 isBookmarked={isBookmarked(m.id)}
                 onToggleBookmark={onToggleBookmark}
-                gridSize={activeGridSize}
                 stampStyle={stampStyle}
                 hoverAccent={hoverAccent}
                 nsfwBlur={nsfwBlur}
-                onSelectAuthor={onSelectAuthor}
                 showMatchPct={showMatchPct}
                 rank={showRank ? (idx + 1) : null}
               />

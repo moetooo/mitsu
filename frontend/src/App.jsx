@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
-import ComparisonSearch from './components/ComparisonSearch';
 import MangaGrid from './components/MangaGrid';
 const BookmarksView = lazy(() => import('./components/BookmarksView'));
 const SurpriseView = lazy(() => import('./components/SurpriseView'));
@@ -119,7 +118,6 @@ export default function App() {
   // Trending Section Divided State & Filters
   const [trendingFormat, setTrendingFormat] = useState('all'); // 'all' | 'manga' | 'manhwa' | 'manhua'
   const [trendingGenre, setTrendingGenre] = useState('all'); // 'all' | 'Action' | 'Fantasy' | ...
-  const [isTop10, setIsTop10] = useState(false);
   const [trendingPage, setTrendingPage] = useState(1);
   const [trendingMangas, setTrendingMangas] = useState([]);
   const [loadingTrending, setLoadingTrending] = useState(false);
@@ -128,11 +126,9 @@ export default function App() {
   // still in flight and spend an AniList request nobody needed.
   const [hasMoreTrending, setHasMoreTrending] = useState(false);
 
-  const [sessionId, setSessionId] = useState(newSessionId);
-  const sessionIdRef = useRef(sessionId);
-  useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
+  // FE-17: the session id lived in state *and* a ref that mirrored it, so the
+  // state was write-only. The ref is the single owner.
+  const sessionIdRef = useRef(newSessionId());
 
   // One sequence number and one AbortController per request channel. A newer
   // request cancels the older one, and a response whose sequence is stale is
@@ -166,7 +162,6 @@ export default function App() {
     const currentSession = forceFresh ? newSessionId() : sessionIdRef.current;
 
     if (forceFresh) {
-      setSessionId(currentSession);
       sessionIdRef.current = currentSession;
     }
 
@@ -497,7 +492,6 @@ export default function App() {
         onSelectTab={handleTabClick}
         bookmarkCount={Array.isArray(bookmarks) ? bookmarks.length : 0}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        theme={settings?.theme || 'sumi'}
       />
 
       <div 
@@ -528,6 +522,7 @@ export default function App() {
                 setIsFilterOpen={setIsFilterOpen}
                 hasActiveFilters={hasActiveFilters}
                 focusStyle={settings.focusStyle || 'glow'}
+                onSurpriseMe={() => handleTabClick('surprise')}
               />
 
               <Suspense fallback={null}>
@@ -728,7 +723,6 @@ export default function App() {
                 onOpenFilter={() => setIsFilterOpen(true)}
                 bookmarks={bookmarks}
                 onToggleBookmark={handleToggleBookmark}
-                onSelectManga={setSelectedManga}
                 imageLength={settings.surpriseImageLength || 60}
                 exhausted={surpriseExhausted}
               />

@@ -86,7 +86,7 @@ function SingleRangeSliderPanel({ title, val, absoluteMin = 1, absoluteMax = 500
     setIsDragging(false);
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch (_) {}
+    } catch {}
   };
 
   return (
@@ -211,7 +211,7 @@ function DualRangeSliderPanel({ title, minVal, maxVal, absoluteMin, absoluteMax,
     setActiveHandle(null);
     try {
       e.currentTarget.releasePointerCapture(e.pointerId);
-    } catch (_) {}
+    } catch {}
   };
 
   return (

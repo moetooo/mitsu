@@ -22,10 +22,7 @@ export const API_ROUTES = {
     `${API_BASE}/manga/trending?page=${page}&limit=${limit}${formatParam}${genreParam}`,
   similar: (id, limit = 6, allowNsfw = false) =>
     `${API_BASE}/manga/${id}/similar?limit=${limit}&allow_nsfw=${allowNsfw}`,
-  mangaDetail: (id) => `${API_BASE}/manga/${id}`,
   recommend: `${API_BASE}/recommend`,
   roulette: `${API_BASE}/roulette`,
   rouletteBatch: `${API_BASE}/roulette/batch`,
-  search: (query) => `${API_BASE}/search?q=${encodeURIComponent(query)}`,
-  health: `${API_BASE}/health`,
 };

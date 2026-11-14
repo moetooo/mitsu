@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, memo } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import { normalizeTag, getTagStyle } from '../utils/tagUtils';
+import { formatScore } from '../utils/scoreUtils';
 import CoverFallback from './CoverFallback';
 
 function MangaCard({ 
@@ -8,12 +9,10 @@ function MangaCard({
   onClick, 
   isBookmarked, 
   onToggleBookmark,
-  gridSize = 'standard',
   hoverAccent = 'vermillion',
   showMatchPct = true,
   rank = null,
-  nsfwBlur = true,
-  onSelectAuthor = null
+  nsfwBlur = true
 }) {
   const isCached = isCoverCached(manga.cover_image_url);
   const [imgLoaded, setImgLoaded] = useState(isCached);
@@ -197,19 +196,13 @@ function MangaCard({
             {manga.title}
           </h3>
 
-          {/* Feature 41: Clickable Author Badge */}
+          {/* FE-09: the author is plain text. It was a button wired to
+              `onSelectAuthor`, which no caller ever passed, so it looked
+              clickable and did nothing. `/recommend` has no author filter. */}
           {authorName && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (onSelectAuthor) onSelectAuthor(authorName);
-              }}
-              className="text-[10px] font-mono text-[var(--accent-indigo)] hover:underline truncate block max-w-full text-left"
-              title={`View more works by ${authorName}`}
-            >
+            <p className="text-[10px] font-mono text-[var(--accent-indigo)] truncate block max-w-full text-left">
               by {authorName}
-            </button>
+            </p>
           )}
 
           {/* Category-Aware Inferred Narrative Tags */}
@@ -247,7 +240,7 @@ function MangaCard({
           {manga.status && <span>• {manga.status}</span>}
           {manga.average_score && (
             <span className="ml-auto text-[var(--accent-vermillion)] font-bold">
-              ★ {(manga.average_score / 10).toFixed(1)}
+              ★ {formatScore(manga.average_score)}
             </span>
           )}
         </div>
