@@ -84,11 +84,20 @@ export default function App() {
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
 
-  // Surprise Me Discovery States
-  const [surpriseManga, setSurpriseManga] = useState(null);
+  // ---- Surprise Me: the App owns the discovery queue (FE-10) --------------
+  // This used to be a single `surpriseManga` plus a seen-id array, while
+  // SurpriseView kept its own copy of the same titles, its own seen-id Set and
+  // its own refill timer. Two owners of one queue is why a draw could be
+  // appended twice, skipped, or shown from a stale index.
+  const [surpriseQueue, setSurpriseQueue] = useState([]);
   const [loadingSurprise, setLoadingSurprise] = useState(false);
   const [surpriseKey, setSurpriseKey] = useState(0);
-  const [seenRouletteIds, setSeenRouletteIds] = useState([]);
+  // FE-25: a failed draw must not look like "nothing matched".
+  const [surpriseError, setSurpriseError] = useState(null);
+  // FE-10: recent ids only. The list is serialized into every request body, so
+  // an unbounded one grows into the multi-KB range after a long session.
+  const MAX_SEEN_IDS = 200;
+  const seenRouletteIdsRef = useRef([]);
 
   const [settings, setSettings] = useState(() => {
     try {
@@ -150,15 +159,28 @@ export default function App() {
     return { controller, isCurrent: () => requestRef.current[channel] === seq };
   };
 
+  // Falsy rows are dropped here, at insertion, not in the view: a hole in the
+  // queue shifts every later offset against currentIndex (FE-28).
+  const appendSurpriseRows = (rows) => {
+    const clean = (Array.isArray(rows) ? rows : []).filter(row => row && row.id != null);
+    if (clean.length === 0) return 0;
+
+    const seen = seenRouletteIdsRef.current;
+    for (const row of clean) if (!seen.includes(row.id)) seen.push(row.id);
+    if (seen.length > MAX_SEEN_IDS) seen.splice(0, seen.length - MAX_SEEN_IDS);
+
+    setSurpriseQueue(prev => {
+      const known = new Set(prev.map(row => row.id));
+      return [...prev, ...clean.filter(row => !known.has(row.id))];
+    });
+    return clean.length;
+  };
+
   const runSurprise = async (forceFresh) => {
     setLoadingSurprise(true);
     setSurpriseExhausted(false);
-    if (forceFresh) {
-      setSurpriseManga(null);
-      setSeenRouletteIds([]);
-      setSurpriseKey(k => k + 1);
-    }
-    const currSeen = forceFresh ? [] : seenRouletteIds;
+    setSurpriseError(null);
+    const currSeen = forceFresh ? [] : seenRouletteIdsRef.current;
     const currentSession = forceFresh ? newSessionId() : sessionIdRef.current;
 
     if (forceFresh) {
@@ -190,18 +212,16 @@ export default function App() {
       if (res.status === 404) {
         // Nothing matches the filters. Say it once instead of drawing forever.
         setSurpriseExhausted(true);
-        setSurpriseManga(null);
         return null;
       }
       if (!res.ok) throw new Error(`roulette request failed: ${res.status}`);
       const data = await res.json();
       if (!isCurrent()) return null;
-      setSurpriseManga(data);
-      setSeenRouletteIds(prev => [...(forceFresh ? [] : prev), data.id]);
       return data;
     } catch (err) {
       if (err.name === 'AbortError' || !isCurrent()) return null;
       console.error('Failed to draw roulette recommendation:', err);
+      setSurpriseError('Could not reach the recommendation service.');
       return null;
     } finally {
       if (isCurrent()) setLoadingSurprise(false);
@@ -213,13 +233,27 @@ export default function App() {
   // call now joins the request that is already in flight.
   const handleSurpriseMe = (forceFresh = false) => {
     if (!forceFresh && surpriseInFlightRef.current) return surpriseInFlightRef.current;
-    const promise = runSurprise(forceFresh).finally(() => {
-      if (surpriseInFlightRef.current === promise) surpriseInFlightRef.current = null;
-    });
+    if (forceFresh) {
+      // A fresh draw starts a new queue and a new session; the key remount is
+      // what resets the view's presentation index.
+      setSurpriseQueue([]);
+      seenRouletteIdsRef.current = [];
+      sessionIdRef.current = newSessionId();
+      setSurpriseKey(k => k + 1);
+    }
+    const promise = runSurprise(forceFresh)
+      .then(row => {
+        if (row) appendSurpriseRows([row]);
+        return row;
+      })
+      .finally(() => {
+        if (surpriseInFlightRef.current === promise) surpriseInFlightRef.current = null;
+      });
     surpriseInFlightRef.current = promise;
     return promise;
   };
 
+  // The view asks for more; it never fetches or dedupes on its own (FE-10).
   const fetchRouletteBatch = async (count = 5) => {
     try {
       const res = await fetch(API_ROUTES.rouletteBatch, {
@@ -227,23 +261,18 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           filters: { ...filters, nsfw: settings.allowNsfw },
-          seen_ids: seenRouletteIds,
+          seen_ids: seenRouletteIdsRef.current,
           session_id: sessionIdRef.current,
           count: count
         })
       });
-      if (res.ok) {
-        const items = await res.json();
-        if (Array.isArray(items) && items.length > 0) {
-          const ids = items.map(i => i.id);
-          setSeenRouletteIds(prev => [...prev, ...ids]);
-          return items;
-        }
-      }
+      if (!res.ok) throw new Error(`roulette batch failed: ${res.status}`);
+      const items = await res.json();
+      return appendSurpriseRows(items) > 0 ? items : [];
     } catch (err) {
       console.error('Failed to fetch roulette batch:', err);
+      return [];
     }
-    return [];
   };
 
   // Listen for browser Back/Forward navigation (popstate)
@@ -291,10 +320,27 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (activeTab === 'surprise' && !surpriseManga && !loadingSurprise) {
+    if (activeTab === 'surprise' && surpriseQueue.length === 0 && !loadingSurprise) {
       handleSurpriseMe();
     }
-  }, [activeTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, surpriseQueue.length]);
+
+  // A filter change invalidates the queue: the queued titles were drawn under
+  // the old filters. This used to live in the view (debounced, and each copy
+  // reset a different half of the state); the queue owner has to reset it.
+  const filtersSignature = JSON.stringify(filters);
+  const filtersMountedRef = useRef(false);
+  useEffect(() => {
+    if (!filtersMountedRef.current) {
+      filtersMountedRef.current = true;
+      return;
+    }
+    if (activeTab !== 'surprise') return;
+    const timer = setTimeout(() => handleSurpriseMe(true), 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtersSignature, activeTab]);
 
   const fetchTrendingData = async (pageNum = 1, append = false) => {
     if (activeTab !== 'trending') return false;
@@ -714,10 +760,11 @@ export default function App() {
             <Suspense fallback={null}>
               <SurpriseView
                 key={surpriseKey}
-                manga={surpriseManga}
+                items={surpriseQueue}
                 loading={loadingSurprise}
-                onRefresh={handleSurpriseMe}
-                fetchBatch={fetchRouletteBatch}
+                error={surpriseError}
+                onRetry={() => handleSurpriseMe(true)}
+                onNeedMore={fetchRouletteBatch}
                 filters={filters}
                 isFilterOpen={isFilterOpen}
                 onOpenFilter={() => setIsFilterOpen(true)}
