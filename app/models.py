@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional, Dict, Any, Union
 
 class RecommendFilters(BaseModel):
@@ -113,6 +113,7 @@ class MangaDetail(BaseModel):
     site_url: Optional[str] = None
     is_nsfw: Optional[bool] = None
 
-    class Config:
-        from_attributes = True
+    # Pydantic v2: class-based `Config` is deprecated and warns on import (QA-20;
+    # the blanket warning filter used to hide it).
+    model_config = ConfigDict(from_attributes=True)
 

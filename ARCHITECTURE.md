@@ -61,8 +61,9 @@ graph TD
 - **Design System**: Custom Japanese Shibui aesthetic (Sumi & Washi themes, Mon glyphs)
 
 ### Backend
-- **Framework**: FastAPI (Python 3.11+)
-- **Vector Model**: SentenceTransformers (`all-MiniLM-L6-v2`, 384-dimensional embeddings)
+- **Framework**: FastAPI on Python 3.13 (the interpreter the suite is verified on; `requirements.txt` pins every runtime and test dependency)
+- **Vector Model**: `fastembed` serving `sentence-transformers/all-MiniLM-L6-v2` (384-dimensional embeddings), with `BAAI/bge-small-en-v1.5` as a logged fallback
+- **Persistence**: Alembic owns the schema. Nothing writes DDL at startup or during ingestion; the app verifies the revision and logs `alembic upgrade head` if the database is behind (`docs/MIGRATIONS.md`)
 - **Middleware**: Brotli ASGI compression with GZip fallback
 
 ### Data & Caching
@@ -112,10 +113,29 @@ Combines explicit scalar filtering (year, score, status, genres) with cosine dis
 ## 6. Directory Layout
 
 - `/app/`: Fastapi application, routes, services, ingestion modules
-  - `/app/services/`: Format classification, retrieval logic, cache handling
-  - `/app/routers/`: API endpoints (`/recommend`, `/roulette`, `/manga`, `/search`)
+  - `/app/core/`: shared primitives with no upward imports (`identity`, `budget`, `schema`)
+  - `/app/services/`: all catalog SQL (`catalog`, `featured`, `trending`, `retrieval` and its ranking modules), format classification, cache handling
+  - `/app/routers/`: API endpoints (`/recommend`, `/roulette`, `/manga`, `/search`, `/vocabulary`); routers hold no SQL
   - `/app/ingestion/`: Pipeline scripts for data gathering
+  - `/app/sync/`: the only orchestrator of provider access (budget, guardrails, checkpointing)
 - `/frontend/`: React + Vite application
   - `/frontend/src/components/`: Reusable UI components
   - `/frontend/src/index.css`: Design system CSS variables and token declarations
-- `/tests/`: Automated test suite (`pytest-asyncio`)
+- `/migrations/`: Alembic revisions — the only way a table changes
+- `/tests/`: test suite (`pytest`), split by behaviour; the database is created by the migrations and never the developer's own
+
+---
+
+## 7. Current deviations from this target design
+
+This document describes the intended architecture. Where the code is still short of it, the gap is listed here rather than by weakening the description above. Each row was checked against the tree at the time of writing; the full review lives in `scratch/code-review-mitsu/reports/CODE_REVIEW_REPORT.md` (ARCH-16).
+
+| Target (§) | Current state | Why it is acceptable today |
+|---|---|---|
+| Catalog repository in `app/repositories/` (§5 target list) | Catalog SQL lives in `app/services/{catalog,featured,trending}.py` and the retrieval modules; no `repositories/` package exists | Routers hold no SQL and `tests/test_layering.py` fails if one comes back, so the boundary is enforced by a test rather than by a directory name |
+| Neutral domain module in `app/catalog/` | The shared identity primitives live in `app/core/identity.py`; the `sync ↔ ingestion` cycle is broken at `core`, not by a new package | One dependency direction, pinned by the same layering test |
+| Persist every derived attribute, including `embedding_model` | `format_type` and `is_nsfw` are stored columns and read from them; the embedding model is not stored beside the vector | The vector column itself encodes 384 dimensions; a model change is a migration, not a silent swap |
+| Split `retrieval.py` into ranking / SQL / diversity modules | Done: `query_filters`, `tag_alignment`, `title_match`, `diversity`, `roulette`, with `retrieval.py` as the session-bound query module | Closed by review finding ARCH-10 |
+| One dashboard | The React dashboard is built to `app/static/dashboard/` (gitignored); a legacy `sync_dashboard.html` is still shipped as a fallback | Documented in `README.md`; the build step is manual, not CI (review finding QA-18) |
+| Test suite as a maintained safety net | The suite is tracked, isolated to its own database and green, with an enforced coverage floor; the nine campaign-record modules live in `tests/milestones/` and four of them skip via `requires_artifacts` when the untracked `scratch/`/`scripts/` material is absent | `README.md` states the distinction; nothing in the suite touches the developer database |
+| Three test styles, `sys.path` hacks (QA-15) | `tests/test_filter_builder.py` is still `unittest.TestCase` and four modules still insert `sys.path` entries for the untracked `scripts/` | Cosmetic only; recorded in the review rather than fixed |

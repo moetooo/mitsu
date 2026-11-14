@@ -1,0 +1,20 @@
+# Coverage configuration (QA-19).
+#
+# The floor is the value measured when coverage was added (74.83% of 4,843
+# statements, 362 tests), not an aspiration. Raise it when the number rises;
+# never lower it to make a change pass -- an uncovered new branch is the thing
+# the floor exists to notice.
+[run]
+source = app
+branch = False
+omit =
+    app/__init__.py
+
+[report]
+fail_under = 74
+precision = 1
+skip_empty = True
+exclude_lines =
+    pragma: no cover
+    if __name__ == .__main__.:
+    raise NotImplementedError

@@ -236,22 +236,28 @@ def test_suspicious_bl_example_is_reproduced_and_safely_rejected():
     assert "(Source: Renta!)" not in cleaned_syn
     assert "Renta!" not in cleaned_syn
 
-    # 2. Verify on persisted calibrated model (if available)
-    if os.path.exists(os.path.join(DEFAULT_MODEL_DIR, "model.joblib")):
-        clf = TagClassifier.load(DEFAULT_MODEL_DIR)
-        assert clf.is_trained
+    # 2. Verify on persisted calibrated model. `models/` is gitignored, so a
+    #    missing artifact is a reported skip, never a silently disabled assert.
+    if not os.path.exists(os.path.join(DEFAULT_MODEL_DIR, "model.joblib")):
+        pytest.skip(
+            f"calibrated model artifact missing at {DEFAULT_MODEL_DIR}; "
+            "this assertion needs the real model, not a fixture-trained one"
+        )
 
-        # Automatic enrichment with accept_tier='high'
-        preds = clf.predict(rec, accept_tier="high", only_accepted=True)
-        pred_slugs = {p["slug"] for p in preds}
+    clf = TagClassifier.load(DEFAULT_MODEL_DIR)
+    assert clf.is_trained
 
-        # CRITICAL ASSERTION: boys_love MUST NOT be accepted
-        assert "boys_love" not in pred_slugs
+    # Automatic enrichment with accept_tier='high'
+    preds = clf.predict(rec, accept_tier="high", only_accepted=True)
+    pred_slugs = {p["slug"] for p in preds}
 
-        # In full enrichment pipeline
-        result = enrich_metadata(rec, classifier=clf, ml_accept_tier="high")
-        pipeline_slugs = {t["slug"] for t in result.inferred_tags}
-        assert "boys_love" not in pipeline_slugs
+    # CRITICAL ASSERTION: boys_love MUST NOT be accepted
+    assert "boys_love" not in pred_slugs
+
+    # In full enrichment pipeline
+    result = enrich_metadata(rec, classifier=clf, ml_accept_tier="high")
+    pipeline_slugs = {t["slug"] for t in result.inferred_tags}
+    assert "boys_love" not in pipeline_slugs
 
 
 def test_model_inference_remains_deterministic():

@@ -1,11 +1,11 @@
 import os, sys
 import pytest
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 from app.db_models import Manga, RecommendationsEdge, DiscoveryQueue
 from app.services.query_filters import build_genre_sql_condition
 from pathlib import Path
 
-BASELINE = Path(__file__).resolve().parent.parent / "migrations" / "versions" / "0001_baseline.py"
+BASELINE = Path(__file__).resolve().parent.parent.parent / "migrations" / "versions" / "0001_baseline.py"
 
 EXPECTED = {"idx_manga_status_year","idx_manga_score_popularity","idx_manga_year_score","idx_manga_chapters","idx_manga_updated_at","idx_manga_cover_notnull","idx_reco_edges_to","idx_reco_edges_votes","idx_discovery_queue_pending","idx_discovery_queue_external"}
 

@@ -1,4 +1,5 @@
 import uuid
+from datetime import datetime
 
 import pytest
 from sqlalchemy import delete
@@ -128,13 +129,21 @@ def test_dashboard_uses_prefix_safe_api_urls():
 
 
 @pytest.mark.asyncio
-async def test_status_paginates_runs_and_reports_progress():
+async def test_status_paginates_runs_and_reports_progress(monkeypatch):
+    # The cutoff is a setting, so the test pins it instead of quoting whatever
+    # value the last deployed environment happened to use (QA-14).
+    monkeypatch.setattr(settings, "SYNC_BACKFILL_CUTOFF", "2026-08-06T19:43:15+00:00")
+
     first = await sync_status(limit=1, offset=0)
     assert len(first["runs"]) <= 1
     assert first["runs_total"] >= len(first["runs"])
     assert first["has_more"] == (0 + len(first["runs"]) < first["runs_total"])
     assert 0.0 <= first["backfill"]["percent"] <= 100.0
-    assert first["backfill"]["cutoff_at"] == "2026-08-06T19:43:15+00:00"
+
+    cutoff = first["backfill"]["cutoff_at"]
+    # Shape, not a snapshot: the payload must stay a timezone-aware timestamp.
+    assert cutoff is not None and cutoff.endswith("+00:00")
+    assert datetime.fromisoformat(cutoff) == datetime.fromisoformat(settings.SYNC_BACKFILL_CUTOFF)
 
     second = await sync_status(limit=1, offset=1)
     assert second["runs_offset"] == 1
