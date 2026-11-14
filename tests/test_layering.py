@@ -1,4 +1,5 @@
-"""Structural tests for the package boundary (ARCH-02).
+"""Structural tests for the package boundary (ARCH-02) and the router boundary
+(ARCH-07).
 
 `app.ingestion` and `app.sync` used to import each other. Nothing failed at
 import time -- Python coped -- so the cycle was invisible until you tried to
@@ -119,4 +120,104 @@ def test_no_package_level_import_cycle():
 )
 def test_shared_primitives_live_in_core(module):
     """The three modules ingestion needs must be importable without touching `app.sync`."""
+    __import__(module)
+
+
+# ---------------------------------------------------------------------------
+# ARCH-07 - routers translate HTTP, they do not read the database
+# ---------------------------------------------------------------------------
+
+ROUTER_ROOT = APP_ROOT / "routers"
+
+#: Routers may name the session type for their `Depends(get_db)` signatures.
+#: Everything else under `sqlalchemy` is a query builder and belongs in services.
+ALLOWED_SQLALCHEMY_MODULES = {"sqlalchemy.ext.asyncio"}
+
+
+def iter_router_trees():
+    """Yield `(path, tree)` for every router module."""
+    for path in sorted(ROUTER_ROOT.rglob("*.py")):
+        if "__pycache__" in path.parts:
+            continue
+        yield path, ast.parse(path.read_text(encoding="utf-8"))
+
+
+def _imported_modules(tree: ast.AST) -> list[tuple[int, str]]:
+    """Every absolute or relative module name an `import`/`from ... import` names."""
+    names: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                names.append((node.lineno, alias.name))
+        elif isinstance(node, ast.ImportFrom):
+            module = node.module or ""
+            if node.level:
+                # `from ..db_models import Manga` inside `app.routers` -> app.db_models
+                module = "." * node.level + module
+            names.append((node.lineno, module))
+    return names
+
+
+def test_routers_do_not_import_sql_query_builders():
+    """A router may import `AsyncSession` and nothing else from SQLAlchemy.
+
+    `select`, `text`, `func`, `or_`, `update` and friends build the statement,
+    which is the service layer's job (ARCH-07). The check is on the import, not
+    on the resulting source text, so a docstring mentioning `text()` does not
+    fail it.
+    """
+    offenders = [
+        f"{path.name}:{line} -> {module}"
+        for path, tree in iter_router_trees()
+        for line, module in _imported_modules(tree)
+        if module.startswith("sqlalchemy") and module not in ALLOWED_SQLALCHEMY_MODULES
+    ]
+    assert not offenders, (
+        "routers must not build SQL; move the statement into app/services/ (ARCH-07). "
+        "Offending imports: " + "; ".join(offenders)
+    )
+
+
+def test_routers_do_not_import_the_orm_models():
+    """Routers stay out of persistence, so they cannot filter on a column either."""
+    offenders = [
+        f"{path.name}:{line} -> {module}"
+        for path, tree in iter_router_trees()
+        for line, module in _imported_modules(tree)
+        if "db_models" in module
+    ]
+    assert not offenders, (
+        "routers must not import app.db_models (ARCH-07); ask a service for the rows. "
+        "Offending imports: " + "; ".join(offenders)
+    )
+
+
+def test_routers_do_not_execute_statements():
+    """No `.execute(` call in a router, whatever it was handed.
+
+    Importing nothing from SQLAlchemy does not stop `await db.execute(some_string)`
+    or a helper smuggled in unparsed; this closes that half.
+    """
+    offenders = [
+        f"{path.name}:{node.lineno}"
+        for path, tree in iter_router_trees()
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr in {"execute", "executemany"}
+    ]
+    assert not offenders, (
+        "routers must not execute statements (ARCH-07). Offending calls: " + "; ".join(offenders)
+    )
+
+
+@pytest.mark.parametrize(
+    "module",
+    [
+        "app.services.catalog",
+        "app.services.featured",
+    ],
+)
+def test_catalogue_reads_are_importable_without_a_database(module):
+    """The modules the routers now delegate to must not need a connection to load."""
     __import__(module)
