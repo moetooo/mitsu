@@ -192,7 +192,11 @@ async def _run_anilist(
             updated = _record_updated_at(record)
             if updated and (page_newest is None or updated > page_newest):
                 page_newest = updated
-            if start_checkpoint and updated and updated <= start_checkpoint:
+            # Strictly older than the checkpoint is known work. A record stamped
+            # exactly AT the checkpoint may be the one the previous run did not
+            # reach before it stopped, so it is processed again; the upsert is
+            # idempotent and reports it as unchanged if nothing moved.
+            if start_checkpoint and updated and updated < start_checkpoint:
                 summary["rows_unchanged"] += 1
                 continue
             if updated and (page_oldest is None or updated < page_oldest):
@@ -352,24 +356,39 @@ async def _run_mangadex_links(
             links = (raw.get("attributes") or {}).get("links") or {}
             ids = _mangadex_link_ids(links)
             ids.append(ExternalId("mangadex", row.mangadex_id))
-            conflicts = await attach_external_ids(session, row.id, ids)
-            blocked = {(c["source"], c["external_id"]) for c in conflicts}
-            if conflicts:
-                summary["rows_conflicted"] += len(conflicts)
-                for conflict in conflicts[:20]:
-                    summary["details"].setdefault("conflicts", []).append(conflict)
 
-            al = normalize_external_id("anilist", links.get("al"))
-            mal = normalize_external_id("mal", links.get("mal"))
-            if al and row.anilist_id is None and ("anilist", al) not in blocked:
-                row.anilist_id = int(al)
-                row.sync_source = "mangadex"
-                summary["rows_updated"] += 1
-            if mal and row.mal_id is None and ("mal", mal) not in blocked:
-                row.mal_id = int(mal)
-                row.sync_source = "mangadex"
-                summary["rows_updated"] += 1
-            row.last_synced_at = _utcnow()
+            # The write sits in a savepoint so a failure here costs one row, not
+            # the page: the savepoint rolls back, the cursor stays behind this
+            # row, and the next run retries it instead of walking past it.
+            try:
+                async with session.begin_nested():
+                    conflicts = await attach_external_ids(session, row.id, ids)
+                    blocked = {(c["source"], c["external_id"]) for c in conflicts}
+                    if conflicts:
+                        summary["rows_conflicted"] += len(conflicts)
+                        for conflict in conflicts[:20]:
+                            summary["details"].setdefault("conflicts", []).append(conflict)
+
+                    al = normalize_external_id("anilist", links.get("al"))
+                    mal = normalize_external_id("mal", links.get("mal"))
+                    if al and row.anilist_id is None and ("anilist", al) not in blocked:
+                        row.anilist_id = int(al)
+                        row.sync_source = "mangadex"
+                        summary["rows_updated"] += 1
+                    if mal and row.mal_id is None and ("mal", mal) not in blocked:
+                        row.mal_id = int(mal)
+                        row.sync_source = "mangadex"
+                        summary["rows_updated"] += 1
+                    row.last_synced_at = _utcnow()
+            except Exception as exc:
+                # Read the id before expiring: the failure already invalidated the
+                # row's state, and touching an expired attribute here would need
+                # IO from a sync context.
+                mangadex_id = row.mangadex_id
+                logger.warning("MangaDex link write failed for %s: %s", mangadex_id, exc, exc_info=True)
+                summary["errors"].append(f"mangadex link write {mangadex_id}: {exc}")
+                session.expire_all()
+                break
 
             last_id = row.id
             processed += 1

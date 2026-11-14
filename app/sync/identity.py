@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, or_, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db_models import Manga, MangaExternalId
@@ -103,30 +103,35 @@ async def attach_external_ids(
     conflicts: list[dict[str, Any]] = []
     now = datetime.now(timezone.utc)
 
+    if not ids:
+        return conflicts
+
+    # Two queries for the whole call instead of two per ID: the legacy columns
+    # are a single OR-ed select and the mapping table a single tuple IN.
+    legacy_owner = {
+        (source, str(value)): manga_id
+        for manga_id, source, value, _priority in await _legacy_id_rows(session, ids)
+        if value is not None
+    }
+    mapped = await _mapping_owners(session, ids)
+
     for item in ids:
         # Check the legacy column too. The mapping table may not contain an ID
         # that was written by older ingestion code, and writing it here would
         # violate the single-column unique index.
         column = SOURCE_COLUMN.get(item.source)
         if column:
-            legacy_owner = await session.scalar(
-                select(Manga.id).where(getattr(Manga, column) == _typed_id(item))
-            )
-            if legacy_owner is not None and legacy_owner != manga_id:
+            legacy_owner_id = legacy_owner.get((item.source, item.external_id))
+            if legacy_owner_id is not None and legacy_owner_id != manga_id:
                 conflicts.append({
                     "source": item.source,
                     "external_id": item.external_id,
-                    "existing_manga_id": legacy_owner,
+                    "existing_manga_id": legacy_owner_id,
                     "wanted_manga_id": manga_id,
                 })
                 continue
 
-        existing = await session.scalar(
-            select(MangaExternalId).where(
-                MangaExternalId.source == item.source,
-                MangaExternalId.external_id == item.external_id,
-            )
-        )
+        existing = mapped.get((item.source, item.external_id))
         if existing is None:
             session.add(MangaExternalId(
                 manga_id=manga_id,
@@ -136,37 +141,98 @@ async def attach_external_ids(
                 first_seen_at=now,
                 last_seen_at=now,
             ))
-        elif existing.manga_id == manga_id:
+            mapped[(item.source, item.external_id)] = manga_id
+        elif existing == manga_id:
             if touch:
-                existing.last_seen_at = now
-                existing.confidence = max(float(existing.confidence or 1.0), confidence)
+                await _touch_mapping(session, item, confidence=confidence, now=now)
         else:
             conflicts.append({
                 "source": item.source,
                 "external_id": item.external_id,
-                "existing_manga_id": existing.manga_id,
+                "existing_manga_id": existing,
                 "wanted_manga_id": manga_id,
             })
 
     return conflicts
 
 
-async def _column_matches(session: AsyncSession, ids: list[ExternalId]) -> dict[str, list[int]]:
+async def _touch_mapping(
+    session: AsyncSession,
+    item: ExternalId,
+    *,
+    confidence: float,
+    now: datetime,
+) -> None:
+    row = await session.scalar(
+        select(MangaExternalId).where(
+            MangaExternalId.source == item.source,
+            MangaExternalId.external_id == item.external_id,
+        )
+    )
+    if row is None:
+        return
+    row.last_seen_at = now
+    row.confidence = max(float(row.confidence or 1.0), confidence)
+
+
+async def _mapping_owners(
+    session: AsyncSession,
+    ids: list[ExternalId],
+) -> dict[tuple[str, str], int]:
+    """(source, external_id) -> manga_id for every mapping row that exists."""
+    if not ids:
+        return {}
+    result = await session.execute(
+        select(MangaExternalId.source, MangaExternalId.external_id, MangaExternalId.manga_id)
+        .where(tuple_(MangaExternalId.source, MangaExternalId.external_id).in_(
+            [(item.source, item.external_id) for item in ids]
+        ))
+    )
+    return {(source, external_id): manga_id for source, external_id, manga_id in result.all()}
+
+
+async def _legacy_id_rows(
+    session: AsyncSession,
+    ids: list[ExternalId],
+) -> list[tuple[int, str, Any, int]]:
+    """Every (manga_id, source, value, priority) whose legacy column holds one of `ids`.
+
+    One query, so callers do not pay a round trip per external ID. The priority
+    is the row's own best-provider rank, which is what the old per-column probe
+    plus re-read computed in two statements.
+    """
+    conditions = _legacy_conditions(ids)
+    if not conditions:
+        return []
+
+    result = await session.execute(
+        select(Manga.id, Manga.anilist_id, Manga.mal_id, Manga.mangadex_id).where(or_(*conditions))
+    )
+
+    wanted = {(item.source, item.external_id) for item in ids}
+    found: list[tuple[int, str, Any, int]] = []
+    for row in result.all():
+        priority = _row_priority(row.anilist_id, row.mal_id, row.mangadex_id)
+        for source, value in (
+            ("anilist", row.anilist_id),
+            ("mal", row.mal_id),
+            ("mangadex", row.mangadex_id),
+        ):
+            if value is None:
+                continue
+            if (source, str(value)) in wanted:
+                found.append((row.id, source, value, priority))
+    return found
+
+
+def _legacy_conditions(ids: list[ExternalId]) -> list[Any]:
     conditions = []
     for item in ids:
         column = SOURCE_COLUMN.get(item.source)
         if not column:
             continue
-        if item.source in {"anilist", "mal"}:
-            conditions.append(getattr(Manga, column) == int(item.external_id))
-        else:
-            conditions.append(getattr(Manga, column) == item.external_id)
-
-    if not conditions:
-        return {}
-
-    result = await session.execute(select(Manga.id).where(or_(*conditions)))
-    return {item.source: [row[0] for row in result.all()] for item in ids}
+        conditions.append(getattr(Manga, column) == _typed_id(item))
+    return conditions
 
 
 async def find_match(
@@ -194,41 +260,21 @@ async def find_match(
     candidate_priority: dict[int, int] = {}
     candidate_evidence: dict[int, set[tuple[str, str]]] = {}
 
+    mapped = await _mapping_owners(session, ids)
     for item in ids:
-        mapped = await session.scalar(
-            select(MangaExternalId.manga_id).where(
-                MangaExternalId.source == item.source,
-                MangaExternalId.external_id == item.external_id,
-            )
-        )
-        if mapped is not None:
-            candidate_priority[mapped] = min(
-                candidate_priority.get(mapped, 999),
+        mapped_id = mapped.get((item.source, item.external_id))
+        if mapped_id is not None:
+            candidate_priority[mapped_id] = min(
+                candidate_priority.get(mapped_id, 999),
                 SOURCE_PRIORITY.get(item.source, 99),
             )
-            candidate_evidence.setdefault(mapped, set()).add((item.source, item.external_id))
+            candidate_evidence.setdefault(mapped_id, set()).add((item.source, item.external_id))
 
-    legacy = await _column_matches(session, ids)
-    if any(legacy.values()):
-        legacy_conditions = []
-        for item in ids:
-            column = SOURCE_COLUMN.get(item.source)
-            if not column:
-                continue
-            if item.source in {"anilist", "mal"}:
-                legacy_conditions.append(getattr(Manga, column) == int(item.external_id))
-            else:
-                legacy_conditions.append(getattr(Manga, column) == item.external_id)
-        if legacy_conditions:
-            rows = await session.execute(
-                select(Manga.id, Manga.anilist_id, Manga.mal_id, Manga.mangadex_id).where(or_(*legacy_conditions))
-            )
-            for row in rows.all():
-                candidate_priority[row.id] = min(
-                    candidate_priority.get(row.id, 999),
-                    _row_priority(row.anilist_id, row.mal_id, row.mangadex_id),
-                )
-                candidate_evidence.setdefault(row.id, set())
+    # One query returns both the owners and the columns the priority depends on,
+    # instead of probing the columns and then re-reading the same rows.
+    for manga_id, _source, _value, priority in await _legacy_id_rows(session, ids):
+        candidate_priority[manga_id] = min(candidate_priority.get(manga_id, 999), priority)
+        candidate_evidence.setdefault(manga_id, set())
 
     if not candidate_priority:
         if allow_title_fallback:
