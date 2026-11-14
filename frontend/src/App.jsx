@@ -9,6 +9,7 @@ import HeroBanner from './components/HeroBanner';
 import BackToTop from './components/BackToTop';
 import { API_ROUTES } from './config';
 import { readJSON, writeJSON } from './utils/storage';
+import { normalizeSettings, clampLimit } from './utils/settings';
 import { toggleBookmark, toStoredBookmarks } from './utils/bookmarks';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
@@ -30,20 +31,6 @@ const INITIAL_FILTERS = {
   format_type: null
 };
 
-const INITIAL_SETTINGS = {
-  theme: 'sumi', // 'sumi' (dark ink) | 'washi' (light paper) | 'amoled'
-  fontStyle: 'serif', // 'serif' | 'sans' | 'mono' | 'display'
-  stampStyle: 'crest',
-  gridSize: 'standard',
-  limit: 12,
-  batchSize: 24, // Dynamic load batch size (User Feature Request)
-  focusStyle: 'glow', // 'glow' | 'vermillion' | 'subtle' | 'none'
-  hoverAccent: 'vermillion', // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
-  allowNsfw: false, // Global 18+ Content Permission in Settings
-  nsfwBlur: true, // Mature/NSFW cover blur safety toggle
-  infiniteScroll: true, // Feature 149: Infinite scroll with IntersectionObserver sentinel
-  surpriseImageLength: 60 // Surprise Me Discovery card image length % (50% - 70%, default 60%)
-};
 
 const VALID_TABS = ['explore', 'trending', 'surprise', 'bookmarks'];
 
@@ -102,13 +89,19 @@ export default function App() {
   const MAX_SEEN_IDS = 200;
   const seenRouletteIdsRef = useRef([]);
 
-  // FE-18: guarded read. A corrupted value yields the defaults instead of a throw.
-  const [settings, setSettings] = useState(() => {
-    const saved = readJSON(['mitsu_settings', 'mangamind_settings'], null);
-    return saved && typeof saved === 'object' && !Array.isArray(saved)
-      ? { ...INITIAL_SETTINGS, ...saved }
-      : INITIAL_SETTINGS;
-  });
+  // FE-18: guarded read. FE-22: normalised, so a corrupted or hand-edited blob
+  // cannot put an unknown theme, an unknown grid size or a limit of 999,999 into
+  // a request body.
+  const [settings, setSettings] = useState(() =>
+    normalizeSettings(readJSON(['mitsu_settings', 'mangamind_settings'], null))
+  );
+  // Every writer goes through the same normaliser (the settings modal, the
+  // preset buttons), so state never holds an unvalidated value.
+  const updateSettings = (updater) => {
+    setSettings(prev => normalizeSettings(typeof updater === 'function' ? updater(prev) : updater));
+  };
+  // FE-22, belt and braces: what the request bodies use, clamped at the call site.
+  const requestLimit = clampLimit(settings.limit);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -478,7 +471,7 @@ export default function App() {
         body: JSON.stringify({
           query: searchQuery,
           filters: { ...activeFilters, nsfw: settings.allowNsfw },
-          limit: settings.limit,
+          limit: requestLimit,
           page: pageNum
         })
       });
@@ -500,7 +493,7 @@ export default function App() {
         });
       }
 
-      setHasMore(newResults.length >= settings.limit);
+      setHasMore(newResults.length >= requestLimit);
       return true;
     } catch (err) {
       if (err.name === 'AbortError') return false;
@@ -864,7 +857,7 @@ export default function App() {
       <Suspense fallback={null}>
         <SettingsModal
           settings={settings}
-          setSettings={setSettings}
+          setSettings={updateSettings}
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
         />
