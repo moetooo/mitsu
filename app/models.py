@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional, Dict, Any, Union
 
 class RecommendFilters(BaseModel):
@@ -18,16 +18,19 @@ class RecommendFilters(BaseModel):
 class RecommendRequest(BaseModel):
     query: str
     filters: Optional[RecommendFilters] = None
-    limit: int = 12
-    page: int = 1
+    # Bounded on purpose: `page=0` used to build a negative OFFSET and fail as a
+    # 500 instead of a 422, and an unbounded limit let a caller ask the retriever
+    # for the whole catalog.
+    limit: int = Field(default=12, ge=1, le=50)
+    page: int = Field(default=1, ge=1, le=100)
 
 class RouletteRequest(BaseModel):
     query: Optional[str] = None
     filters: Optional[RecommendFilters] = None
     seen_ids: Optional[List[int]] = None
     session_id: Optional[str] = None
-    count: int = 1
-    limit: int = 40
+    count: int = Field(default=1, ge=1, le=20)
+    limit: int = Field(default=40, ge=1, le=100)
 
 class RecommendationResult(BaseModel):
     # Local database PK. None only for a live provider row (for example a

@@ -315,6 +315,9 @@ async def get_trending_manga(
             Manga.cover_image_url.isnot(None),
             sa_text(safety_filter()),
         ]
+        # Bind parameters for the caller-supplied parts of this query; nothing
+        # from the request is ever concatenated into the SQL text.
+        query_params: Dict[str, Any] = {}
 
         # Prefer partition pruning: constrain start_year when possible; also include releasing titles
         year_clause = (Manga.start_year >= 2020) | ((Manga.status == "RELEASING") & Manga.start_year.isnot(None))
@@ -337,8 +340,14 @@ async def get_trending_manga(
             elif low in ['shounen ai']:
                 where_clauses.append(sa_text("(tags::text ILIKE '%Shounen Ai%' OR tags::text ILIKE '%Boys'' Love%' OR tags::text ILIKE '%Yaoi%')"))
             else:
-                safe_genre = genre_clean.replace("'", "''")
-                where_clauses.append(sa_text(f"(genres @> ARRAY['{safe_genre}'] OR tags::text ILIKE '%{safe_genre}%')"))
+                # The genre is caller-supplied. Bind it instead of interpolating
+                # it into the SQL text: doubling single quotes was the only thing
+                # standing between this endpoint and the request in `genre`.
+                where_clauses.append(sa_text(
+                    "(:trending_genre = ANY(genres)"
+                    " OR tags::text ILIKE '%' || :trending_genre || '%')"
+                ))
+                query_params["trending_genre"] = genre_clean
 
         offset = max(0, (page - 1) * limit)
         stmt = (
@@ -353,7 +362,7 @@ async def get_trending_manga(
             .offset(offset)
             .limit(limit)
         )
-        result = await db.execute(stmt)
+        result = await db.execute(stmt, query_params) if query_params else await db.execute(stmt)
         mangas: List[Any] = list(result.scalars().all())
 
         trending_results = [
@@ -418,13 +427,23 @@ async def get_similar_manga(manga_id: int, response: Response, limit: int = 6, a
     result = await db.execute(stmt)
     manga = result.scalar_one_or_none()
     
-    if not manga or manga.embedding is None:
-        raise HTTPException(status_code=404, detail="Manga or embedding not found")
-        
+    if not manga:
+        raise HTTPException(status_code=404, detail="Manga not found")
+
+    has_precomputed_edges = bool(getattr(manga, "similar_mangas", None))
+    if manga.embedding is None and not has_precomputed_edges:
+        # Either signal is enough: the precomputed `similar_mangas` edges are a
+        # stored answer that does not need the vector. Requiring an embedding
+        # turned a usable row into a 404.
+        raise HTTPException(status_code=404, detail="No similarity data for this manga")
+
     candidates = []
-    
-    if getattr(manga, 'similar_mangas', None):
-        similar_ids = [item["id"] for item in manga.similar_mangas][:limit + 10]
+
+    if has_precomputed_edges:
+        # Resolve the whole edge list. Pre-slicing it to limit + 10 decided before
+        # the NSFW filter how many candidates could be considered, so a later
+        # clean title could never fill the page.
+        similar_ids = [item["id"] for item in manga.similar_mangas]
         stmt_sim = select(Manga).options(defer(Manga.embedding)).where(Manga.id.in_(similar_ids))
         res_sim = await db.execute(stmt_sim)
         sim_mangas_map: Dict[Any, Any] = {m.id: m for m in res_sim.scalars().all()}
