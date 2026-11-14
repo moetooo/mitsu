@@ -47,3 +47,62 @@ async def fetch_page(page: int, per_page: int = 50, start_date_greater: int = No
         
         json_data = await fetch_with_retry(anilist_bucket, raw_post)
         return json_data["data"]["Page"]
+
+UPDATED_QUERY = """
+query ($page: Int, $perPage: Int) {
+  Page(page: $page, perPage: $perPage) {
+    pageInfo { total currentPage lastPage hasNextPage }
+    media(type: MANGA, sort: UPDATED_AT_DESC) {
+      id
+      idMal
+      updatedAt
+      title { romaji english native }
+      description(asHtml: false)
+      genres
+      tags { name rank }
+      status
+      startDate { year month day }
+      chapters
+      volumes
+      averageScore
+      popularity
+      synonyms
+      coverImage { large medium color }
+      bannerImage
+      siteUrl
+    }
+  }
+}
+"""
+
+
+async def fetch_updated_page(
+    page: int,
+    per_page: int = 50,
+    *,
+    max_retries: int = 2,
+    before_request=None,
+) -> Dict[str, Any]:
+    """Fetch one page of recently updated manga, newest first.
+
+    AniList has no `updatedAt_greater` filter, so the sync uses this sort and
+    stops once a page is older than the stored checkpoint.
+    """
+    variables = {"page": page, "perPage": per_page}
+
+    async with httpx.AsyncClient() as client:
+        def raw_post():
+            return client.post(
+                ANILIST_API_URL,
+                json={"query": UPDATED_QUERY, "variables": variables},
+                timeout=20.0,
+                headers={"User-Agent": "Mitsu/1.0 (catalog sync)"},
+            )
+
+        json_data = await fetch_with_retry(
+            anilist_bucket,
+            raw_post,
+            max_retries=max_retries,
+            before_request=before_request,
+        )
+        return json_data["data"]["Page"]

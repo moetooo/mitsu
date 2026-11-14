@@ -1,16 +1,23 @@
 from typing import Any
-from sqlalchemy import Column, Integer, String, Text, JSON, DateTime, ForeignKey, Index, Boolean, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer,
+    JSON, String, Text, UniqueConstraint, text,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from pgvector.sqlalchemy import Vector
 from .db import Base
 
 class Manga(Base):
     __tablename__ = "manga"
+    # Matches the deployed table: `id` is the only primary key and each
+    # external id is unique on its own. The previous composite
+    # (id, start_year) key + partitioning declaration could not be created on a
+    # fresh database (the FK from manga_external_ids has no unique target) and
+    # let one external id exist twice when start_year differed.
     __table_args__ = (
-        UniqueConstraint("anilist_id", "start_year", name="uq_manga_anilist_id"),
-        UniqueConstraint("mal_id", "start_year", name="uq_manga_mal_id"),
-        UniqueConstraint("mangadex_id", "start_year", name="uq_manga_mangadex_id"),
-        {'postgresql_partition_by': 'RANGE (start_year)'}
+        UniqueConstraint("anilist_id", name="uq_manga_anilist_id"),
+        UniqueConstraint("mal_id", name="uq_manga_mal_id"),
+        UniqueConstraint("mangadex_id", name="uq_manga_mangadex_id"),
     )
 
     id = Column(Integer, primary_key=True, index=True, autoincrement=True)
@@ -21,10 +28,14 @@ class Manga(Base):
     title_english = Column(Text)
     title_native = Column(Text)
     synopsis = Column(Text)
+    # Persisted safety signal. Decided once at ingestion time from provider
+    # metadata (MangaDex contentRating, AniList isAdult) and kept as the single
+    # source of truth for public visibility; see app/services/safety.py.
+    is_nsfw = Column(Boolean, nullable=False, server_default=text("false"))
     genres = Column(ARRAY(Text))
     tags: Any = Column(JSONB) # [{"name": "Survival", "rank": 87}, ...]
     status = Column(Text)
-    start_year = Column(Integer, primary_key=True)
+    start_year = Column(Integer)
     chapters = Column(Integer)
     volumes = Column(Integer)
     average_score = Column(Integer)
@@ -38,6 +49,12 @@ class Manga(Base):
     similar_mangas: Any = Column(JSONB, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=text('now()'))
     updated_at = Column(DateTime(timezone=True), server_default=text('now()'))
+
+    # Daily sync observability. Nullable so legacy rows remain valid.
+    source_updated_at = Column(DateTime(timezone=True), nullable=True)
+    last_synced_at = Column(DateTime(timezone=True), nullable=True)
+    sync_source = Column(String(32), nullable=True)
+    similarities_computed_at = Column(DateTime(timezone=True), nullable=True)
 
 class DiscoveryQueue(Base):
     __tablename__ = "discovery_queue"
@@ -61,6 +78,85 @@ class RecommendationsEdge(Base):
     manga_id_from = Column(Integer, primary_key=True)
     manga_id_to = Column(Integer, primary_key=True)
     vote_count = Column(Integer)
+
+
+class MangaExternalId(Base):
+    """Canonical external-ID map.
+
+    Uniqueness on (source, external_id) is what prevents a second local row from
+    being created for an ID that is already attached to another manga.
+    """
+    __tablename__ = "manga_external_ids"
+    __table_args__ = (
+        UniqueConstraint("source", "external_id", name="uq_manga_external_ids_source_external"),
+    )
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    manga_id = Column(Integer, ForeignKey("manga.id", ondelete="CASCADE"), nullable=False, index=True)
+    source = Column(String(32), nullable=False)
+    external_id = Column(String(128), nullable=False)
+    confidence = Column(Float, nullable=False, server_default=text("1.0"))
+    first_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    last_seen_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class SyncState(Base):
+    """Per-source checkpoint. AniList stores its updatedAt watermark here."""
+    __tablename__ = "sync_state"
+
+    source = Column(String(32), primary_key=True)
+    checkpoint_value = Column(Text, nullable=True)
+    checkpoint_at = Column(DateTime(timezone=True), nullable=True)
+    last_success_at = Column(DateTime(timezone=True), nullable=True)
+    last_attempt_at = Column(DateTime(timezone=True), nullable=True)
+    last_error = Column(Text, nullable=True)
+    # Oldest provider update date the backfill has consumed. Drives progress.
+    progress_at = Column(DateTime(timezone=True), nullable=True)
+    # AniList reports lastPage for UPDATED_AT_DESC; lets the UI show exact page progress.
+    page_total = Column(Integer, nullable=True)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class SyncSetting(Base):
+    """Small runtime overrides that must survive restarts (for example auto on/off)."""
+    __tablename__ = "sync_settings"
+
+    key = Column(String(64), primary_key=True)
+    value = Column(Text, nullable=False)
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class SyncApiUsage(Base):
+    """Daily provider request counter. One row per UTC day/source."""
+    __tablename__ = "sync_api_usage"
+
+    day = Column(Date, primary_key=True)
+    source = Column(String(32), primary_key=True)
+    requests = Column(Integer, nullable=False, server_default=text("0"))
+    updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+
+class SyncRun(Base):
+    """Bounded audit log for manual and scheduled syncs."""
+    __tablename__ = "sync_runs"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    run_id = Column(String(36), nullable=False, unique=True)
+    mode = Column(String(16), nullable=False)  # manual | auto
+    status = Column(String(24), nullable=False)  # running | success | partial | failed | skipped | rejected
+    dry_run = Column(Boolean, nullable=False, server_default=text("false"))
+    started_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    pages_fetched = Column(Integer, nullable=False, server_default=text("0"))
+    rows_seen = Column(Integer, nullable=False, server_default=text("0"))
+    rows_inserted = Column(Integer, nullable=False, server_default=text("0"))
+    rows_updated = Column(Integer, nullable=False, server_default=text("0"))
+    rows_unchanged = Column(Integer, nullable=False, server_default=text("0"))
+    rows_embedded = Column(Integer, nullable=False, server_default=text("0"))
+    rows_conflicted = Column(Integer, nullable=False, server_default=text("0"))
+    request_usage = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    details = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
+    error = Column(Text, nullable=True)
 
 # Indexes are defined in the schema script or alembic, but we can also define them here:
 Index('idx_manga_genres', Manga.genres, postgresql_using='gin')

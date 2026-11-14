@@ -36,8 +36,18 @@ class TokenBucket:
 anilist_bucket = TokenBucket(rate_per_sec=0.5, burst=2)
 mangadex_bucket = TokenBucket(rate_per_sec=2, burst=3)
 
-async def fetch_with_retry(bucket: TokenBucket, fetch_fn: Callable[..., Any], *args, max_retries: int = 6, **kwargs):
+async def fetch_with_retry(
+    bucket: TokenBucket,
+    fetch_fn: Callable[..., Any],
+    *args,
+    max_retries: int = 6,
+    before_request: Callable[[], Any] | None = None,
+    **kwargs,
+):
     for attempt in range(max_retries):
+        # Budget callbacks run before the network attempt so retries also count.
+        if before_request is not None:
+            await before_request()
         await bucket.acquire()
         try:
             response = await fetch_fn(*args, **kwargs)
