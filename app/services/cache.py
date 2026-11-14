@@ -109,3 +109,36 @@ async def get_session_seen(session_id: str) -> Set[int]:
     except Exception as e:
         logger.warning("Redis get_session_seen error: %s", e)
         return set()
+
+
+# Catalog writes invalidate these namespaces. TTL remains the backstop.
+_CATALOG_CACHE_PATTERNS = (
+    "recommend:*",
+    "search:*",
+    "manga:featured_mix:*",
+    "manga:trending:*",
+    "manga:detail:*",
+    "manga:similar:*",
+    "roulette:pool:*",
+)
+
+
+async def invalidate_catalog_caches() -> int:
+    """Delete recommendation/search/roulette keys after a catalog change.
+
+    Uses SCAN, not KEYS, so a large Redis instance is not blocked.
+    """
+    deleted = 0
+    try:
+        for pattern in _CATALOG_CACHE_PATTERNS:
+            batch: list[str] = []
+            async for key in redis_client.scan_iter(match=pattern, count=500):
+                batch.append(key)
+                if len(batch) >= 500:
+                    deleted += await redis_client.delete(*batch)
+                    batch.clear()
+            if batch:
+                deleted += await redis_client.delete(*batch)
+    except Exception as e:
+        logger.warning("Catalog cache invalidation failed: %s", e, exc_info=True)
+    return deleted

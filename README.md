@@ -45,6 +45,41 @@ npm install
 npm run dev
 ```
 
+### 4. Refresh the catalog
+The refresh job is idempotent and can be run manually or once per day from an
+external scheduler. It caps AniList at 30 requests/day and never inserts a known
+external ID twice.
+
+```bash
+python -m app.sync.cli migrate
+python -m app.sync.cli run --dry-run --max-pages 1
+python -m app.sync.cli run --mode manual --max-pages 3
+python -m app.sync.cli backfill --until 2026-08-06T19:43:15+00:00 --max-pages 25
+python -m app.sync.cli status
+```
+
+Open <http://localhost:8000/admin/dashboard> for the control page: daily request
+bars, backfill progress toward the cutoff, guardrail counters, a dark/light
+toggle, paginated run history with expandable multiline details, and
+manual/backfill triggers. Sign in with `SYNC_ADMIN_USERNAME` / `SYNC_ADMIN_PASSWORD`.
+There is no default account: leave either one unset and the whole admin surface
+answers 503, so a fresh deployment cannot be entered with a well-known password.
+Scheduled auto sync starts **off**; enable it with the switch when you are ready.
+
+The dashboard is a separate React/Vite entry. A production build is checked into
+`app/static/dashboard/`; after editing `frontend/src/dashboard/`, rebuild it:
+
+```bash
+cd frontend
+npm run build:dashboard
+```
+
+For live dashboard work, `npm run dev:dashboard` serves the entry at
+<http://localhost:5174/dashboard.html> and proxies `/admin` to the API.
+
+Full setup, API trigger, Windows Task Scheduler, and cron details are in
+[`docs/catalog-sync.md`](docs/catalog-sync.md).
+
 ---
 
 ## 📄 License

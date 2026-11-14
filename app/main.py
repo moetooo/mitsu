@@ -1,8 +1,10 @@
 import time
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from fastapi import FastAPI, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from brotli_asgi import BrotliMiddleware
 from sqlalchemy import text
 from .routers import recommend, manga, search, admin
@@ -10,6 +12,7 @@ from .middleware.rate_limit import RateLimitMiddleware
 from .services.embedding import generate_embedding
 from .services.cache import redis_client
 from .db import engine, AsyncSessionLocal
+from .sync.schema import ensure_sync_schema
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,6 +29,13 @@ async def lifespan(app: FastAPI):
         logger.info("FastEmbed model pre-warmed successfully.")
     except Exception as e:
         logger.warning("FastEmbed model pre-warming warning: %s", e)
+
+    # Additive, idempotent sync schema. Safe on every start; no catalog rewrite.
+    try:
+        await ensure_sync_schema()
+        logger.info("Sync schema ready.")
+    except Exception as e:
+        logger.warning("Sync schema setup warning: %s", e)
 
     yield
 
@@ -62,6 +72,16 @@ app.include_router(recommend.router, tags=["recommend"])
 app.include_router(manga.router, tags=["manga"])
 app.include_router(search.router, tags=["search"])
 app.include_router(admin.router, tags=["admin"])
+
+# The dashboard is a separate Vite entry built into app/static/dashboard.
+# Assets are relative to /admin/dashboard, so a proxy prefix such as /api works.
+_DASHBOARD_ASSETS = Path(__file__).resolve().parent / "static" / "dashboard" / "assets"
+if _DASHBOARD_ASSETS.is_dir():
+    app.mount(
+        "/admin/assets",
+        StaticFiles(directory=str(_DASHBOARD_ASSETS)),
+        name="dashboard-assets",
+    )
 
 @app.get("/health")
 async def health(response: Response):
