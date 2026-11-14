@@ -3,6 +3,7 @@ import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import CoverFallback from './CoverFallback';
 import { API_ROUTES } from '../config';
 import { formatScore } from '../utils/scoreUtils';
+import { cleanSynopsis } from '../utils/text';
 
 function HeroCoverThumbnail({ url, title }) {
   const isCached = isCoverCached(url);
@@ -255,7 +256,7 @@ export default function HeroBanner({ mangas = [], onSelectManga, intervalMs = 50
 
           {current.synopsis && (
             <p className="text-xs text-white/70 font-light line-clamp-2 md:line-clamp-3 leading-relaxed mt-1 font-serif-jp">
-              {current.synopsis}
+              {cleanSynopsis(current.synopsis, '')}
             </p>
           )}
         </div>

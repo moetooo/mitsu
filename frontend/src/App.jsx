@@ -2,11 +2,15 @@ import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
 import MangaGrid from './components/MangaGrid';
+import ErrorBanner from './components/ErrorBanner';
 const BookmarksView = lazy(() => import('./components/BookmarksView'));
 const SurpriseView = lazy(() => import('./components/SurpriseView'));
 import HeroBanner from './components/HeroBanner';
 import BackToTop from './components/BackToTop';
 import { API_ROUTES } from './config';
+import { readJSON, writeJSON } from './utils/storage';
+import { normalizeSettings, clampLimit } from './utils/settings';
+import { toggleBookmark, toStoredBookmarks } from './utils/bookmarks';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
 const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
@@ -27,20 +31,6 @@ const INITIAL_FILTERS = {
   format_type: null
 };
 
-const INITIAL_SETTINGS = {
-  theme: 'sumi', // 'sumi' (dark ink) | 'washi' (light paper) | 'amoled'
-  fontStyle: 'serif', // 'serif' | 'sans' | 'mono' | 'display'
-  stampStyle: 'crest',
-  gridSize: 'standard',
-  limit: 12,
-  batchSize: 24, // Dynamic load batch size (User Feature Request)
-  focusStyle: 'glow', // 'glow' | 'vermillion' | 'subtle' | 'none'
-  hoverAccent: 'vermillion', // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo'
-  allowNsfw: false, // Global 18+ Content Permission in Settings
-  nsfwBlur: true, // Mature/NSFW cover blur safety toggle
-  infiniteScroll: true, // Feature 149: Infinite scroll with IntersectionObserver sentinel
-  surpriseImageLength: 60 // Surprise Me Discovery card image length % (50% - 70%, default 60%)
-};
 
 const VALID_TABS = ['explore', 'trending', 'surprise', 'bookmarks'];
 
@@ -84,35 +74,53 @@ export default function App() {
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
 
-  // Surprise Me Discovery States
-  const [surpriseManga, setSurpriseManga] = useState(null);
+  // ---- Surprise Me: the App owns the discovery queue (FE-10) --------------
+  // This used to be a single `surpriseManga` plus a seen-id array, while
+  // SurpriseView kept its own copy of the same titles, its own seen-id Set and
+  // its own refill timer. Two owners of one queue is why a draw could be
+  // appended twice, skipped, or shown from a stale index.
+  const [surpriseQueue, setSurpriseQueue] = useState([]);
   const [loadingSurprise, setLoadingSurprise] = useState(false);
   const [surpriseKey, setSurpriseKey] = useState(0);
-  const [seenRouletteIds, setSeenRouletteIds] = useState([]);
+  // FE-25: a failed draw must not look like "nothing matched".
+  const [surpriseError, setSurpriseError] = useState(null);
+  // FE-10: recent ids only. The list is serialized into every request body, so
+  // an unbounded one grows into the multi-KB range after a long session.
+  const MAX_SEEN_IDS = 200;
+  const seenRouletteIdsRef = useRef([]);
 
-  const [settings, setSettings] = useState(() => {
-    try {
-      const saved = localStorage.getItem('mitsu_settings') || localStorage.getItem('mangamind_settings');
-      return saved ? { ...INITIAL_SETTINGS, ...JSON.parse(saved) } : INITIAL_SETTINGS;
-    } catch {
-      return INITIAL_SETTINGS;
-    }
-  });
+  // FE-18: guarded read. FE-22: normalised, so a corrupted or hand-edited blob
+  // cannot put an unknown theme, an unknown grid size or a limit of 999,999 into
+  // a request body.
+  const [settings, setSettings] = useState(() =>
+    normalizeSettings(readJSON(['mitsu_settings', 'mangamind_settings'], null))
+  );
+  // Every writer goes through the same normaliser (the settings modal, the
+  // preset buttons), so state never holds an unvalidated value.
+  const updateSettings = (updater) => {
+    setSettings(prev => normalizeSettings(typeof updater === 'function' ? updater(prev) : updater));
+  };
+  // FE-22, belt and braces: what the request bodies use, clamped at the call site.
+  const requestLimit = clampLimit(settings.limit);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
 
-  // LocalStorage Bookmarks state
+  // FE-25: "no titles found" and "the request failed" are different answers, and
+  // the grid used to give the first for both. One message per fetch path.
+  const [searchError, setSearchError] = useState(null);
+  const [trendingError, setTrendingError] = useState(null);
+  // FE-15: identity of what is on screen. The grid resets its sort pill when it
+  // changes, and keeps it when the same set just grows by a page.
+  const [searchResultKey, setSearchResultKey] = useState('');
+
+  // Saved titles. Capped and projected on the way in as well as on the way out,
+  // so a hand-edited or legacy blob cannot load 2,000 entries (FE-18).
   const [bookmarks, setBookmarks] = useState(() => {
-    try {
-      const saved = localStorage.getItem('mitsu_bookmarks') || localStorage.getItem('mangamind_bookmarks');
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
+    const saved = readJSON(['mitsu_bookmarks', 'mangamind_bookmarks'], []);
+    return Array.isArray(saved) ? toStoredBookmarks(saved) : [];
   });
 
   // Trending Section Divided State & Filters
@@ -150,15 +158,28 @@ export default function App() {
     return { controller, isCurrent: () => requestRef.current[channel] === seq };
   };
 
+  // Falsy rows are dropped here, at insertion, not in the view: a hole in the
+  // queue shifts every later offset against currentIndex (FE-28).
+  const appendSurpriseRows = (rows) => {
+    const clean = (Array.isArray(rows) ? rows : []).filter(row => row && row.id != null);
+    if (clean.length === 0) return 0;
+
+    const seen = seenRouletteIdsRef.current;
+    for (const row of clean) if (!seen.includes(row.id)) seen.push(row.id);
+    if (seen.length > MAX_SEEN_IDS) seen.splice(0, seen.length - MAX_SEEN_IDS);
+
+    setSurpriseQueue(prev => {
+      const known = new Set(prev.map(row => row.id));
+      return [...prev, ...clean.filter(row => !known.has(row.id))];
+    });
+    return clean.length;
+  };
+
   const runSurprise = async (forceFresh) => {
     setLoadingSurprise(true);
     setSurpriseExhausted(false);
-    if (forceFresh) {
-      setSurpriseManga(null);
-      setSeenRouletteIds([]);
-      setSurpriseKey(k => k + 1);
-    }
-    const currSeen = forceFresh ? [] : seenRouletteIds;
+    setSurpriseError(null);
+    const currSeen = forceFresh ? [] : seenRouletteIdsRef.current;
     const currentSession = forceFresh ? newSessionId() : sessionIdRef.current;
 
     if (forceFresh) {
@@ -190,18 +211,16 @@ export default function App() {
       if (res.status === 404) {
         // Nothing matches the filters. Say it once instead of drawing forever.
         setSurpriseExhausted(true);
-        setSurpriseManga(null);
         return null;
       }
       if (!res.ok) throw new Error(`roulette request failed: ${res.status}`);
       const data = await res.json();
       if (!isCurrent()) return null;
-      setSurpriseManga(data);
-      setSeenRouletteIds(prev => [...(forceFresh ? [] : prev), data.id]);
       return data;
     } catch (err) {
       if (err.name === 'AbortError' || !isCurrent()) return null;
       console.error('Failed to draw roulette recommendation:', err);
+      setSurpriseError('Could not reach the recommendation service.');
       return null;
     } finally {
       if (isCurrent()) setLoadingSurprise(false);
@@ -213,13 +232,27 @@ export default function App() {
   // call now joins the request that is already in flight.
   const handleSurpriseMe = (forceFresh = false) => {
     if (!forceFresh && surpriseInFlightRef.current) return surpriseInFlightRef.current;
-    const promise = runSurprise(forceFresh).finally(() => {
-      if (surpriseInFlightRef.current === promise) surpriseInFlightRef.current = null;
-    });
+    if (forceFresh) {
+      // A fresh draw starts a new queue and a new session; the key remount is
+      // what resets the view's presentation index.
+      setSurpriseQueue([]);
+      seenRouletteIdsRef.current = [];
+      sessionIdRef.current = newSessionId();
+      setSurpriseKey(k => k + 1);
+    }
+    const promise = runSurprise(forceFresh)
+      .then(row => {
+        if (row) appendSurpriseRows([row]);
+        return row;
+      })
+      .finally(() => {
+        if (surpriseInFlightRef.current === promise) surpriseInFlightRef.current = null;
+      });
     surpriseInFlightRef.current = promise;
     return promise;
   };
 
+  // The view asks for more; it never fetches or dedupes on its own (FE-10).
   const fetchRouletteBatch = async (count = 5) => {
     try {
       const res = await fetch(API_ROUTES.rouletteBatch, {
@@ -227,23 +260,18 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           filters: { ...filters, nsfw: settings.allowNsfw },
-          seen_ids: seenRouletteIds,
+          seen_ids: seenRouletteIdsRef.current,
           session_id: sessionIdRef.current,
           count: count
         })
       });
-      if (res.ok) {
-        const items = await res.json();
-        if (Array.isArray(items) && items.length > 0) {
-          const ids = items.map(i => i.id);
-          setSeenRouletteIds(prev => [...prev, ...ids]);
-          return items;
-        }
-      }
+      if (!res.ok) throw new Error(`roulette batch failed: ${res.status}`);
+      const items = await res.json();
+      return appendSurpriseRows(items) > 0 ? items : [];
     } catch (err) {
       console.error('Failed to fetch roulette batch:', err);
+      return [];
     }
-    return [];
   };
 
   // Listen for browser Back/Forward navigation (popstate)
@@ -291,15 +319,33 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (activeTab === 'surprise' && !surpriseManga && !loadingSurprise) {
+    if (activeTab === 'surprise' && surpriseQueue.length === 0 && !loadingSurprise) {
       handleSurpriseMe();
     }
-  }, [activeTab]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab, surpriseQueue.length]);
+
+  // A filter change invalidates the queue: the queued titles were drawn under
+  // the old filters. This used to live in the view (debounced, and each copy
+  // reset a different half of the state); the queue owner has to reset it.
+  const filtersSignature = JSON.stringify(filters);
+  const filtersMountedRef = useRef(false);
+  useEffect(() => {
+    if (!filtersMountedRef.current) {
+      filtersMountedRef.current = true;
+      return;
+    }
+    if (activeTab !== 'surprise') return;
+    const timer = setTimeout(() => handleSurpriseMe(true), 400);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtersSignature, activeTab]);
 
   const fetchTrendingData = async (pageNum = 1, append = false) => {
     if (activeTab !== 'trending') return false;
     const { controller, isCurrent } = beginRequest('trending');
     setLoadingTrending(true);
+    if (pageNum === 1) setTrendingError(null);
 
     const limit = 12;
     const formatParam = trendingFormat !== 'all' ? `&format_type=${trendingFormat}` : '';
@@ -330,6 +376,10 @@ export default function App() {
       // hasMoreTrending alone and reports false so the page counter stays put.
       if (err.name === 'AbortError') return false;
       console.error('Trending fetch error:', err);
+      if (isCurrent() && pageNum === 1) {
+        setTrendingError('The catalogue did not answer. Try again in a moment.');
+        setTrendingMangas([]);
+      }
       return false;
     } finally {
       if (isCurrent()) setLoadingTrending(false);
@@ -361,11 +411,11 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', settings?.theme || 'sumi');
     document.documentElement.setAttribute('data-title-font', settings?.fontStyle || 'serif');
     document.documentElement.setAttribute('data-accent', settings?.accent || settings?.hoverAccent || 'vermillion');
-    if (settings) localStorage.setItem('mitsu_settings', JSON.stringify(settings));
+    if (settings) writeJSON('mitsu_settings', settings);
   }, [settings]);
 
   useEffect(() => {
-    if (Array.isArray(bookmarks)) localStorage.setItem('mitsu_bookmarks', JSON.stringify(bookmarks));
+    if (Array.isArray(bookmarks)) writeJSON('mitsu_bookmarks', toStoredBookmarks(bookmarks));
   }, [bookmarks]);
 
   const hasActiveFilters =
@@ -393,15 +443,9 @@ export default function App() {
     filters.format_type ? 1 : 0
   ].reduce((a, b) => a + b, 0);
 
+  // FE-18: add/remove, project and cap in one place (utils/bookmarks.js).
   const handleToggleBookmark = (mangaToToggle) => {
-    setBookmarks(prev => {
-      const exists = prev.some(b => b.id === mangaToToggle.id);
-      if (exists) {
-        return prev.filter(b => b.id !== mangaToToggle.id);
-      } else {
-        return [...prev, mangaToToggle];
-      }
-    });
+    setBookmarks(prev => toggleBookmark(prev, mangaToToggle));
   };
 
   const handleSearch = async (e, customQuery = null, pageNum = 1, customFilters = null) => {
@@ -413,7 +457,11 @@ export default function App() {
     const { controller, isCurrent } = beginRequest('search');
     setLoading(true);
     setSearched(true);
-    if (pageNum === 1) setPage(1);
+    setSearchError(null);
+    if (pageNum === 1) {
+      setPage(1);
+      setSearchResultKey(`${searchQuery}|${JSON.stringify(activeFilters)}`);
+    }
 
     try {
       const res = await fetch(API_ROUTES.recommend, {
@@ -423,7 +471,7 @@ export default function App() {
         body: JSON.stringify({
           query: searchQuery,
           filters: { ...activeFilters, nsfw: settings.allowNsfw },
-          limit: settings.limit,
+          limit: requestLimit,
           page: pageNum
         })
       });
@@ -445,11 +493,17 @@ export default function App() {
         });
       }
 
-      setHasMore(newResults.length >= settings.limit);
+      setHasMore(newResults.length >= requestLimit);
       return true;
     } catch (err) {
       if (err.name === 'AbortError') return false;
       console.error('Search error:', err);
+      if (isCurrent()) {
+        setSearchError('The recommendation service did not answer. The titles you saw before are still here.');
+        // A failed first page must not leave the previous query's rows on screen
+        // as if they were this query's results.
+        if (pageNum === 1) setMangas([]);
+      }
       return false;
     } finally {
       if (isCurrent()) setLoading(false);
@@ -578,7 +632,13 @@ export default function App() {
                   </button>
                 </div>
               )}
+              <ErrorBanner
+                message={searchError}
+                label="Search failed"
+                onRetry={() => handleSearch(null, query, 1, filters)}
+              />
               <MangaGrid
+                resultKey={searchResultKey}
                 mangas={mangas}
                 loading={loading}
                 hasSearched={searched}
@@ -688,7 +748,13 @@ export default function App() {
             </div>
 
             {/* FORMAT CATALOG GRID VIEW */}
+            <ErrorBanner
+              message={trendingError}
+              label="Catalogue unavailable"
+              onRetry={() => fetchTrendingData(1, false)}
+            />
             <MangaGrid
+              resultKey={`trending:${trendingFormat}:${trendingGenre}`}
               mangas={trendingMangas}
               loading={loadingTrending}
               hasSearched={true}
@@ -714,10 +780,11 @@ export default function App() {
             <Suspense fallback={null}>
               <SurpriseView
                 key={surpriseKey}
-                manga={surpriseManga}
+                items={surpriseQueue}
                 loading={loadingSurprise}
-                onRefresh={handleSurpriseMe}
-                fetchBatch={fetchRouletteBatch}
+                error={surpriseError}
+                onRetry={() => handleSurpriseMe(true)}
+                onNeedMore={fetchRouletteBatch}
                 filters={filters}
                 isFilterOpen={isFilterOpen}
                 onOpenFilter={() => setIsFilterOpen(true)}
@@ -790,7 +857,7 @@ export default function App() {
       <Suspense fallback={null}>
         <SettingsModal
           settings={settings}
-          setSettings={setSettings}
+          setSettings={updateSettings}
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
         />

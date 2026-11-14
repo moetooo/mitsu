@@ -1,4 +1,5 @@
 import MangaGrid from './MangaGrid';
+import { MAX_BOOKMARKS } from '../utils/bookmarks';
 
 export default function BookmarksView({ bookmarks, onSelectManga, onToggleBookmark, onClearAll, gridSize = 'standard', hoverAccent = 'vermillion' }) {
   if (bookmarks.length === 0) {
@@ -20,7 +21,9 @@ export default function BookmarksView({ bookmarks, onSelectManga, onToggleBookma
       <div className="flex items-center justify-between border-b border-[var(--border-color)] pb-3">
         <div>
           <h2 className="text-2xl font-serif-jp font-bold text-[var(--text-color)]">Saved Manga Collection</h2>
-          <p className="text-xs text-[var(--text-muted)] font-mono">{bookmarks.length} bookmarked titles saved locally</p>
+          <p className="text-xs text-[var(--text-muted)] font-mono">
+            {bookmarks.length} of {MAX_BOOKMARKS} titles saved locally
+          </p>
         </div>
         <button
           onClick={onClearAll}

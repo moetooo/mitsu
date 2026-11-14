@@ -4,6 +4,7 @@ import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 import CoverFallback from './CoverFallback';
 import useEscapeLayer from '../hooks/useEscapeLayer';
 import { formatScore } from '../utils/scoreUtils';
+import { cleanSynopsis } from '../utils/text';
 
 function SurpriseCoverImage({ url, title, allowHover, heightPercent = 100 }) {
   const isCached = isCoverCached(url);
@@ -69,27 +70,30 @@ function SurpriseCoverImage({ url, title, allowHover, heightPercent = 100 }) {
 }
 
 export default function SurpriseView({ 
-  manga, 
+  items = [],
   loading, 
-  onRefresh, 
-  fetchBatch,
   filters = {},
   isFilterOpen = false,
   onOpenFilter,
   bookmarks = [], 
   onToggleBookmark, 
   imageLength = 60,
+  error = null,
+  onRetry,
+  onNeedMore,
   exhausted = false
 }) {
-  // Queue of discovered manga titles
-  const [titles, setTitles] = useState(() => (manga ? [manga] : []));
+  // FE-10: the queue itself lives in App. This component owns the presentation
+  // index only, and asks for more instead of fetching, deduping or holding a
+  // second seen-id set of its own.
   const [currentIndex, setCurrentIndex] = useState(0);
 
   // Sliding state for throttling and hover suppression mid-motion
   const [isSliding, setIsSliding] = useState(false);
 
-  // Mobile card peek accordion toggle state
-  const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
+  // FE-16: the peek accordion belongs to one card, so it is keyed by manga id
+  // instead of being a single flag that followed the user to the next card.
+  const [detailsOpenId, setDetailsOpenId] = useState(null);
 
   // Diptych Folio Full Details state & responsive breakpoint
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
@@ -108,8 +112,6 @@ export default function SurpriseView({
   const [cardSize, setCardSize] = useState({ width: 390, height: 560 });
 
   // References
-  const seenIdsRef = useRef(new Set(manga?.id ? [manga.id] : []));
-  const isFetchingBatchRef = useRef(false);
   const touchStartYRef = useRef(0);
   const isSlidingRef = useRef(false);
   const lastSlideTimeRef = useRef(0);
@@ -161,134 +163,54 @@ export default function SurpriseView({
     img.src = url;
   };
 
-  // Preload covers for subsequent titles
+  // Preload covers for the next few titles
   useEffect(() => {
-    if (titles.length > 0) {
-      for (let i = currentIndex; i < Math.min(currentIndex + 4, titles.length); i++) {
-        if (titles[i]?.cover_image_url) {
-          preloadImage(titles[i].cover_image_url);
+    if (items.length > 0) {
+      for (let i = currentIndex; i < Math.min(currentIndex + 4, items.length); i++) {
+        if (items[i]?.cover_image_url) {
+          preloadImage(items[i].cover_image_url);
         }
       }
     }
-  }, [currentIndex, titles]);
+  }, [currentIndex, items]);
 
-  const onRefreshRef = useRef(onRefresh);
-  useEffect(() => {
-    onRefreshRef.current = onRefresh;
-  }, [onRefresh]);
-
-  // Sync initial manga prop if queue is empty
-  useEffect(() => {
-    if (manga && titles.length === 0) {
-      setTitles([manga]);
-      seenIdsRef.current.add(manga.id);
-    }
-  }, [manga, titles.length]);
-
-  // Fallback: If queue is empty and not actively loading, trigger fetch.
-  // Two guards keep this from racing the App: a local in-flight flag so a
-  // re-render cannot start a second draw, and `exhausted`, which the App sets
-  // when the last draw answered 404. Without the second one the view pulsed
-  // "Discovering Titles..." and kept asking forever when nothing matched.
-  const fallbackRequestedRef = useRef(false);
-  useEffect(() => {
-    if (titles.length > 0 || loading || exhausted) return;
-    if (fallbackRequestedRef.current) return;
-    if (!onRefreshRef.current) return;
-    fallbackRequestedRef.current = true;
-    onRefreshRef.current().then(first => {
-      if (first) {
-        setTitles([first]);
-        seenIdsRef.current.add(first.id);
-      }
-    }).finally(() => {
-      fallbackRequestedRef.current = false;
-    });
-  }, [titles.length, loading, exhausted]);
-
-  // Refill background buffer whenever remaining titles drop below 4
-  const refillQueue = useCallback(async () => {
-    if (isFetchingBatchRef.current || !fetchBatch) return;
-    isFetchingBatchRef.current = true;
-
+  // Ask the queue owner for more. The in-flight flag is local so a wheel burst
+  // or a re-render cannot start a second batch (the App appends and dedupes).
+  const needMoreRef = useRef(false);
+  const requestMore = useCallback(async () => {
+    if (needMoreRef.current || !onNeedMore) return;
+    needMoreRef.current = true;
     try {
-      const batch = await fetchBatch(5);
-      if (Array.isArray(batch) && batch.length > 0) {
-        const newItems = batch.filter(item => {
-          if (!item?.id || seenIdsRef.current.has(item.id)) return false;
-          seenIdsRef.current.add(item.id);
-          return true;
-        });
-
-        if (newItems.length > 0) {
-          newItems.forEach(item => {
-            if (item.cover_image_url) preloadImage(item.cover_image_url);
-          });
-          setTitles(prev => [...prev, ...newItems]);
-        }
-      }
-    } catch (err) {
-      console.error('Failed to prefetch surprise discovery batch:', err);
+      await onNeedMore(5);
     } finally {
-      isFetchingBatchRef.current = false;
+      needMoreRef.current = false;
     }
-  }, [fetchBatch]);
+  }, [onNeedMore]);
 
-  // Initial prefetch to ensure continuous scroll queue
+  // Keep the queue topped up: four ahead is enough to slide smoothly.
   useEffect(() => {
-    if (titles.length < 4) {
-      refillQueue();
+    if (items.length - currentIndex <= 3) {
+      requestMore();
     }
-  }, [refillQueue, titles.length]);
+  }, [items.length, currentIndex, requestMore]);
 
-  // Check if buffer needs refill when navigating
+  // A fresh draw replaces the queue; the index must not point past its end.
   useEffect(() => {
-    if (titles.length - currentIndex <= 3) {
-      refillQueue();
+    if (currentIndex > items.length - 1) {
+      setCurrentIndex(Math.max(0, items.length - 1));
     }
-  }, [currentIndex, titles.length, refillQueue]);
+  }, [items.length, currentIndex]);
 
-  const prevFiltersRef = useRef(JSON.stringify(filters));
-  const isFirstMountRef = useRef(true);
-
-  // Reset queue if filters change (only after initial mount, and debounced)
+  // Each card owns its own accordion state.
   useEffect(() => {
-    if (isFirstMountRef.current) {
-      isFirstMountRef.current = false;
-      return;
-    }
-
-    const currentFiltersStr = JSON.stringify(filters);
-    if (prevFiltersRef.current === currentFiltersStr) {
-      return;
-    }
-    prevFiltersRef.current = currentFiltersStr;
-
-    const timer = setTimeout(() => {
-      seenIdsRef.current.clear();
-      setIsSliding(false);
-      setIsDetailsOpen(false);
-      resetIdleHintTimer();
-
-      if (onRefreshRef.current) {
-        onRefreshRef.current().then(first => {
-          if (first) {
-            setTitles([first]);
-            setCurrentIndex(0);
-            seenIdsRef.current.add(first.id);
-          }
-        });
-      }
-    }, 400);
-
-    return () => clearTimeout(timer);
-  }, [filters, resetIdleHintTimer]);
+    setDetailsOpenId(null);
+  }, [currentIndex]);
 
   // Navigation handlers (Vertical physical slide)
   const handleNext = useCallback(() => {
     resetIdleHintTimer();
     if (isSlidingRef.current) return;
-    if (currentIndex < titles.length - 1) {
+    if (currentIndex < items.length - 1) {
       isSlidingRef.current = true;
       lastSlideTimeRef.current = Date.now();
       setIsSliding(true);
@@ -298,9 +220,10 @@ export default function SurpriseView({
         isSlidingRef.current = false;
       }, 360);
     } else {
-      refillQueue();
+      // End of the buffer: one owner fetches, this only asks.
+      requestMore();
     }
-  }, [currentIndex, titles.length, refillQueue, resetIdleHintTimer]);
+  }, [currentIndex, items.length, requestMore, resetIdleHintTimer]);
 
   const handlePrev = useCallback(() => {
     resetIdleHintTimer();
@@ -439,11 +362,6 @@ export default function SurpriseView({
     }
   };
 
-  const getCleanSynopsis = (text) => {
-    if (!text) return 'No synopsis description available for this title.';
-    if (typeof text !== 'string') return String(text);
-    return text.replace(/<[^>]*>?/gm, '').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-  };
 
   // Filter counters
   const excludedCount = filters.exclude_genres?.length || 0;
@@ -571,7 +489,7 @@ export default function SurpriseView({
               Full Synopsis
             </span>
             <p className="text-xs font-serif-jp leading-relaxed text-[var(--text-color)]/90 select-text">
-              {getCleanSynopsis(mangaItem.synopsis)}
+              {cleanSynopsis(mangaItem.synopsis)}
             </p>
           </div>
         </div>
@@ -597,6 +515,8 @@ export default function SurpriseView({
     if (!mangaItem) return null;
     const isBookmarked = Array.isArray(bookmarks) ? bookmarks.some(b => b?.id === mangaItem.id) : false;
     const allowHover = isActive && !isSliding && !(isDesktop && isDetailsOpen);
+    // FE-16: only the card whose id is stored can be expanded.
+    const detailsOpen = detailsOpenId === mangaItem.id;
 
     const cardTitle = typeof mangaItem.title === 'string' 
       ? mangaItem.title 
@@ -653,11 +573,11 @@ export default function SurpriseView({
           onClick={(e) => {
             if (isActive) {
               e.stopPropagation();
-              setMobileDetailsOpen(prev => !prev);
+              setDetailsOpenId(prev => (prev === mangaItem.id ? null : mangaItem.id));
             }
           }}
           className={`absolute inset-x-0 bottom-0 z-20 p-5 pt-3.5 bg-gradient-to-t from-[var(--surface-color)] via-[var(--surface-color)]/95 to-[var(--surface-color)]/85 border-t border-[var(--border-color)] transition-all duration-350 flex flex-col justify-end ${
-            (mobileDetailsOpen || allowHover) ? 'group-hover:shadow-2xl' : ''
+            (detailsOpen || allowHover) ? 'group-hover:shadow-2xl' : ''
           }`}
         >
           {/* Header Peek Area (Always visible at bottom of card, perfectly stable) */}
@@ -682,7 +602,7 @@ export default function SurpriseView({
           {/* REVEALED CONTENT ON HOVER / EXPAND */}
           <div 
             className={`card-details-peek overflow-hidden ${
-              mobileDetailsOpen ? 'is-expanded' : ''
+              detailsOpen ? 'is-expanded' : ''
             }`}
           >
             <div className="min-h-0 overflow-hidden space-y-2.5">
@@ -712,7 +632,7 @@ export default function SurpriseView({
 
               {/* Italic Synopsis Excerpt */}
               <p className="font-serif-jp text-[var(--text-muted)] italic text-xs leading-relaxed line-clamp-2 sm:line-clamp-3">
-                "{getCleanSynopsis(mangaItem.synopsis)}"
+                "{cleanSynopsis(mangaItem.synopsis)}"
               </p>
 
               {/* Full-Width Action Button */}
@@ -742,21 +662,38 @@ export default function SurpriseView({
   const gap = 20;
   const translateY = -(currentIndex * (cardSize.height + gap));
 
-  // Empty or Loading state with aesthetic pulse
-  if (titles.length === 0 || (loading && titles.length === 0)) {
+  // Empty, loading, failed and exhausted are four different things (FE-25).
+  if (items.length === 0) {
+    const failed = Boolean(error);
     return (
       <div
         role="status"
         aria-live="polite"
         className="w-full h-full flex flex-col items-center justify-center space-y-3 bg-transparent select-none animate-in fade-in duration-200"
       >
-        <div className={`w-9 h-9 rounded-xl bg-[var(--surface-color)] border border-[var(--border-color)] flex items-center justify-center text-[var(--accent-vermillion)] font-bold text-base shadow-md ${exhausted ? '' : 'animate-pulse'}`}>
+        <div className={`w-9 h-9 rounded-xl bg-[var(--surface-color)] border border-[var(--border-color)] flex items-center justify-center text-[var(--accent-vermillion)] font-bold text-base shadow-md ${exhausted || failed || !loading ? '' : 'animate-pulse'}`}>
           ❖
         </div>
-        <span className={`text-xs font-mono text-[var(--text-muted)] tracking-widest uppercase ${exhausted ? '' : 'animate-pulse'}`}>
-          {exhausted ? 'No titles match these filters' : 'Discovering Titles...'}
+        <span className={`text-xs font-mono text-[var(--text-muted)] tracking-widest uppercase ${exhausted || failed || !loading ? '' : 'animate-pulse'}`}>
+          {failed ? 'Could not draw a title' : exhausted ? 'No titles match these filters' : 'Discovering Titles...'}
         </span>
-        {exhausted && (
+        {failed && (
+          <>
+            <span className="text-[11px] font-mono text-[var(--text-muted)]/70 tracking-wide text-center max-w-xs">
+              {error}
+            </span>
+            {onRetry && (
+              <button
+                type="button"
+                onClick={onRetry}
+                className="px-4 py-1.5 rounded-full border border-[var(--border-color)] bg-[var(--surface-color)] text-[11px] font-mono uppercase tracking-widest text-[var(--text-color)] hover:border-[var(--accent-vermillion)] hover:text-[var(--accent-vermillion)] cursor-pointer"
+              >
+                Try again
+              </button>
+            )}
+          </>
+        )}
+        {exhausted && !failed && (
           <span className="text-[11px] font-mono text-[var(--text-muted)]/70 tracking-wide">
             Loosen a filter, then click Surprise Me again
           </span>
@@ -810,7 +747,7 @@ export default function SurpriseView({
               }}
               className="flex flex-col gap-[20px] items-center"
             >
-              {titles.filter(Boolean).map((item, idx) => (
+              {items.map((item, idx) => (
                 <div 
                   key={item?.id || idx}
                   style={{ 
@@ -841,7 +778,7 @@ export default function SurpriseView({
                 isDetailsOpen ? 'pointer-events-auto' : 'pointer-events-none'
               }`}
             >
-              {renderDossierContent(titles[currentIndex] || manga, () => setIsDetailsOpen(false))}
+              {renderDossierContent(items[currentIndex], () => setIsDetailsOpen(false))}
             </div>
           )}
         </div>
@@ -900,7 +837,7 @@ export default function SurpriseView({
           >
             {/* Grab handle */}
             <div className="w-12 h-1.5 rounded-full bg-[var(--text-muted)]/30 mx-auto -mt-1 mb-3" />
-            {renderDossierContent(titles[currentIndex] || manga, () => setIsDetailsOpen(false))}
+            {renderDossierContent(items[currentIndex], () => setIsDetailsOpen(false))}
           </div>
         </div>
       )}

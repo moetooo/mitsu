@@ -11,7 +11,7 @@ describe('MangaGrid sort pills (FE-30)', () => {
   it('reports the active sort with aria-pressed', () => {
     render(<MangaGrid mangas={ITEMS} hasSearched onCardClick={vi.fn()} onToggleBookmark={vi.fn()} />);
 
-    const group = screen.getByRole('group', { name: 'Sort results' });
+    const group = screen.getByRole('group', { name: 'Sort this page' });
     const best = within(group).getByRole('button', { name: 'Best Match' });
     const rating = within(group).getByRole('button', { name: 'Highest Rating' });
 
@@ -37,5 +37,45 @@ describe('MangaGrid status regions (FE-30)', () => {
     render(<MangaGrid mangas={[]} hasSearched onCardClick={vi.fn()} onToggleBookmark={vi.fn()} />);
 
     expect(screen.getByRole('status')).toHaveTextContent('No titles found.');
+  });
+});
+
+describe('MangaGrid sort scope (FE-15)', () => {
+  it('offers no sort the data cannot back', () => {
+    render(<MangaGrid mangas={ITEMS} hasSearched onCardClick={vi.fn()} onToggleBookmark={vi.fn()} />);
+
+    const group = screen.getByRole('group', { name: 'Sort this page' });
+    // RecommendationResult has no `popularity`, so "Most Popular" was a button
+    // that reordered nothing.
+    expect(within(group).queryByRole('button', { name: 'Most Popular' })).toBeNull();
+    expect(within(group).getAllByRole('button')).toHaveLength(3);
+  });
+
+  it('resets the sort when the result set changes, and keeps it when a page is appended', () => {
+    const { rerender } = render(
+      <MangaGrid resultKey="cats" mangas={ITEMS} hasSearched onCardClick={vi.fn()} onToggleBookmark={vi.fn()} />
+    );
+    const group = () => screen.getByRole('group', { name: 'Sort this page' });
+
+    fireEvent.click(within(group()).getByRole('button', { name: 'Highest Rating' }));
+    expect(within(group()).getByRole('button', { name: 'Highest Rating' })).toHaveAttribute('aria-pressed', 'true');
+
+    // Same query, page 2 appended: the user's choice survives.
+    rerender(
+      <MangaGrid
+        resultKey="cats"
+        mangas={[...ITEMS, { id: 3, title: 'Three', cover_image_url: null, average_score: 9, start_year: 2020 }]}
+        hasSearched
+        onCardClick={vi.fn()}
+        onToggleBookmark={vi.fn()}
+      />
+    );
+    expect(within(group()).getByRole('button', { name: 'Highest Rating' })).toHaveAttribute('aria-pressed', 'true');
+
+    // A new query is a new set: back to Best Match.
+    rerender(
+      <MangaGrid resultKey="dogs" mangas={ITEMS} hasSearched onCardClick={vi.fn()} onToggleBookmark={vi.fn()} />
+    );
+    expect(within(group()).getByRole('button', { name: 'Best Match' })).toHaveAttribute('aria-pressed', 'true');
   });
 });

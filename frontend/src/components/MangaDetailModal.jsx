@@ -4,6 +4,7 @@ import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 import CoverFallback from './CoverFallback';
 import { API_ROUTES } from '../config';
 import { formatScore } from '../utils/scoreUtils';
+import { cleanSynopsis } from '../utils/text';
 import useScrollLock from '../hooks/useScrollLock';
 import useEscapeLayer from '../hooks/useEscapeLayer';
 import useFocusTrap from '../hooks/useFocusTrap';
@@ -411,7 +412,7 @@ export default function MangaDetailModal({
                 Synopsis
               </h3>
               <p className="text-[var(--text-color)] text-xs md:text-sm leading-relaxed whitespace-pre-wrap font-light">
-                {manga.synopsis || "No detailed synopsis available."}
+                {cleanSynopsis(manga.synopsis, 'No detailed synopsis available.')}
               </p>
             </div>
 

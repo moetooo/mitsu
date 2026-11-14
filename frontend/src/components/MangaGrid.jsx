@@ -10,6 +10,12 @@ const GRID_COLS = {
   large: 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-8'
 };
 
+// FE-15: the card is a 2:3 cover plus a fixed info block; the row height has to
+// follow the measured column width. These are module constants so the measuring
+// effect has an honest dependency list.
+const CARD_INFO_HEIGHT = 108;
+const GRID_GAP = { compact: 14, standard: 24, large: 32 };
+
 // Declared once, outside the component. An inline row component is a fresh
 // component type on every render, so react-window unmounted and remounted every
 // visible row on each pass and the rows lost their state (cover-loaded flags,
@@ -73,7 +79,11 @@ export default function MangaGrid({
   hideDivider = false,
   showRank = false,
   showMatchPct = true,
-  infiniteScroll = true
+  infiniteScroll = true,
+  // FE-15: identity of the result set. A new search or a new trending filter is
+  // a different set, and the sort pill has to go back to Best Match; appending
+  // page 2 to the same set must not reset it.
+  resultKey = ''
 }) {
   const [sortBy, setSortBy] = useState('best_match');
   const booksRef = useRef(bookmarks);
@@ -87,13 +97,20 @@ export default function MangaGrid({
 
   const activeGridSize = gridSize || 'standard';
 
-  // Feature 16: Sort mangas dynamically (Memoized to prevent sorting on unrelated renders)
+  useEffect(() => {
+    setSortBy('best_match');
+  }, [resultKey]);
+
+  // Feature 16: Sort mangas dynamically (Memoized to prevent sorting on unrelated renders).
+  // FE-15: "Most Popular" sorted on `popularity`, which RecommendationResult has
+  // never carried, so it was a loop that always returned the server order. The
+  // option is gone rather than pretending. Sorting stays client-side, on the
+  // current page, and the bar says so.
   const sortedMangas = useMemo(() => {
     if (sortBy === 'best_match') return mangas;
     return [...mangas].sort((a, b) => {
       if (sortBy === 'score') return (b.average_score || 0) - (a.average_score || 0);
       if (sortBy === 'newest') return (b.start_year || 0) - (a.start_year || 0);
-      if (sortBy === 'popular') return (b.popularity || 0) - (a.popularity || 0);
       return 0;
     });
   }, [mangas, sortBy]);
@@ -137,8 +154,28 @@ export default function MangaGrid({
 
   // Threshold: only virtualize when collection exceeds 36 items to prevent mounting jitter on small sets
   const shouldVirtualize = sortedMangas.length > 36;
-  const estimatedRowHeight = activeGridSize === 'compact' ? 360 : activeGridSize === 'large' ? 520 : 450;
   const totalRows = Math.ceil(sortedMangas.length / columns);
+
+  // FE-15: the row height used to be one of three constants (360/450/520) while
+  // the card is a 2:3 cover whose width follows the column count. At six compact
+  // columns the cover alone was taller than the row, so rows overlapped and the
+  // last row was clipped. Measure the column instead: cover height plus the
+  // 108px info block the card renders under it.
+  const [rowHeight, setRowHeight] = useState(450);
+  useEffect(() => {
+    const el = gridRef.current;
+    const measure = () => {
+      const width = el?.clientWidth || (typeof window !== 'undefined' ? window.innerWidth : 1024);
+      const gap = GRID_GAP[activeGridSize] ?? GRID_GAP.standard;
+      const colWidth = Math.max(80, (width - gap * (columns - 1)) / columns);
+      setRowHeight(Math.round(colWidth * 1.5) + CARD_INFO_HEIGHT);
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined' || !el) return undefined;
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [columns, activeGridSize]);
 
   // Feature 74: Virtualized Grid Render Container using react-window
   const rowProps = useMemo(() => ({
@@ -261,18 +298,17 @@ export default function MangaGrid({
           {/* Feature 16: Horizontal Sort Pill Toggle Bar */}
           <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar max-w-full">
             <span className="text-[11px] font-mono text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1 hidden md:inline">
-              Sort:
+              Sort this page:
             </span>
             <div
               role="group"
-              aria-label="Sort results"
+              aria-label="Sort this page"
               className="inline-flex items-center gap-1 bg-[var(--surface-color)] border border-[var(--border-color)] p-1 rounded-full shadow-xs"
             >
               {[
                 { id: 'best_match', label: 'Best Match' },
                 { id: 'score', label: 'Highest Rating' },
-                { id: 'newest', label: 'Newest Release' },
-                { id: 'popular', label: 'Most Popular' }
+                { id: 'newest', label: 'Newest Release' }
               ].map(opt => (
                 <button
                   key={opt.id}
@@ -296,12 +332,11 @@ export default function MangaGrid({
         <List
           style={{ height: viewportHeight, width: '100%' }}
           rowCount={totalRows}
-          rowHeight={estimatedRowHeight}
+          rowHeight={rowHeight}
           rowComponent={VirtualRow}
           rowProps={rowProps}
           overscanCount={2}
           onRowsRendered={requestMoreIfNearTheEnd}
-          className="no-scrollbar"
         />
       ) : (
         /* Standard Un-virtualized Grid Display for smaller item sets */
