@@ -12,6 +12,7 @@ from ..models import RecommendFilters
 from ..services import cache
 from ..config import settings
 from ..enrichment.vocabulary import CANONICAL_VOCABULARY
+from .safety import safety_filter
 
 DEFAULT_CATEGORY_WEIGHTS: Dict[str, float] = {
     "relationship": 1.00,
@@ -165,7 +166,8 @@ def _array_contains_condition(value: str, key: str, params: Optional[Dict[str, A
 def build_genre_sql_condition(
     genres_list: Optional[List[str]],
     exclude: bool = False,
-    params: Optional[Dict[str, Any]] = None
+    params: Optional[Dict[str, Any]] = None,
+    key_prefix: str = "genre",
 ) -> Optional[str]:
     """Builds an exhaustive SQL condition across PostgreSQL text array genres and JSONB tags.
 
@@ -182,7 +184,9 @@ def build_genre_sql_condition(
         if not isinstance(genre, str) or not genre.strip():
             continue
         low = genre.lower().strip()
-        key = "genre_" + str(idx)
+        # Include and exclude lists need distinct bind names, otherwise the
+        # exclusion overwrites the inclusion and the two conditions cancel out.
+        key = key_prefix + "_" + str(idx)
 
         if low in ("yaoi", "bl", "boys' love"):
             conditions.append("(" + " OR ".join([
@@ -333,12 +337,16 @@ def apply_filter_criteria(
         where_clauses.append("chapters <= :max_chapters")
 
     if filters.genres:
-        cond = build_genre_sql_condition(filters.genres, exclude=False, params=params)
+        cond = build_genre_sql_condition(
+            filters.genres, exclude=False, params=params, key_prefix="genre"
+        )
         if cond:
             where_clauses.append(cond)
 
     if filters.exclude_genres:
-        cond = build_genre_sql_condition(filters.exclude_genres, exclude=True, params=params)
+        cond = build_genre_sql_condition(
+            filters.exclude_genres, exclude=True, params=params, key_prefix="exclude_genre"
+        )
         if cond:
             where_clauses.append(cond)
 
@@ -479,7 +487,8 @@ async def retrieve_similar_manga(
     query_inferred_tags: Optional[List[Dict[str, Any]]] = None,
     enable_inferred_tags: Optional[bool] = None,
     category_weights: Optional[Dict[str, float]] = None,
-    tag_boost: Optional[float] = None
+    tag_boost: Optional[float] = None,
+    exclude_id: Optional[int] = None,
 ):
     if isinstance(query_embedding, str):
         emb_str = query_embedding
@@ -490,12 +499,20 @@ async def retrieve_similar_manga(
     where_clauses = ["embedding IS NOT NULL"]
     params: Dict[str, Any] = {"emb": emb_str, "limit": limit, "offset": offset}
 
+    # Excluding the seed row in SQL keeps page offsets exact: filtering it out
+    # in Python after retrieval consumed an extra candidate, so the next page
+    # started one row too early and repeated a title.
+    if exclude_id is not None:
+        params["exclude_id"] = exclude_id
+        where_clauses.append("id <> :exclude_id")
+
     if isinstance(filters, dict):
         filters = RecommendFilters(**filters)
 
     allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
-    if not allow_nsfw:
-        where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")
+    nsfw_predicate = safety_filter(allow_nsfw)
+    if nsfw_predicate:
+        where_clauses.append(nsfw_predicate)
 
     apply_filter_criteria(filters, where_clauses, params)
 
@@ -826,8 +843,9 @@ async def sample_candidates_from_db(
     where_clauses = ["cover_image_url IS NOT NULL"]
 
     allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
-    if not allow_nsfw:
-        where_clauses.append("(genres IS NULL OR NOT (genres && ARRAY['Hentai', 'Erotica']))")
+    nsfw_predicate = safety_filter(allow_nsfw)
+    if nsfw_predicate:
+        where_clauses.append(nsfw_predicate)
 
     rand_seed = f"seed_{random.randint(1, 999999999)}_{time.time()}"
     params: Dict[str, Any] = {

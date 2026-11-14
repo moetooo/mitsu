@@ -14,6 +14,7 @@ from ..db_models import Manga
 from ..models import MangaDetail, RecommendationResult, RecommendFilters
 from ..services.retrieval import retrieve_similar_manga
 from ..services.cache import get_cached, set_cached
+from ..services.safety import resolve_is_nsfw, row_is_nsfw, safety_filter
 
 logger = logging.getLogger("mitsu.manga")
 
@@ -35,7 +36,7 @@ async def get_featured_manga(response: Response, limit: int = 6, db: AsyncSessio
     stmt_pop = (
         select(Manga)
         .options(defer(Manga.embedding))
-        .where(Manga.cover_image_url.isnot(None))
+        .where(Manga.cover_image_url.isnot(None), sa_text(safety_filter()))
         .order_by(Manga.popularity.desc().nullslast())
         .limit(25)
     )
@@ -48,7 +49,8 @@ async def get_featured_manga(response: Response, limit: int = 6, db: AsyncSessio
         .where(
             Manga.cover_image_url.isnot(None),
             Manga.average_score >= 78,
-            (Manga.popularity < 500) | (Manga.popularity.is_(None))
+            (Manga.popularity < 500) | (Manga.popularity.is_(None)),
+            sa_text(safety_filter()),
         )
         .order_by(Manga.average_score.desc().nullslast())
         .limit(25)
@@ -59,7 +61,11 @@ async def get_featured_manga(response: Response, limit: int = 6, db: AsyncSessio
     stmt_acclaimed = (
         select(Manga)
         .options(defer(Manga.embedding))
-        .where(Manga.cover_image_url.isnot(None), Manga.average_score >= 84)
+        .where(
+            Manga.cover_image_url.isnot(None),
+            Manga.average_score >= 84,
+            sa_text(safety_filter()),
+        )
         .order_by(Manga.average_score.desc().nullslast())
         .limit(25)
     )
@@ -69,7 +75,7 @@ async def get_featured_manga(response: Response, limit: int = 6, db: AsyncSessio
     stmt_all = (
         select(Manga)
         .options(defer(Manga.embedding))
-        .where(Manga.cover_image_url.isnot(None))
+        .where(Manga.cover_image_url.isnot(None), sa_text(safety_filter()))
         .limit(50)
     )
     res_all = list((await db.execute(stmt_all)).scalars().all())
@@ -126,6 +132,7 @@ async def get_featured_manga(response: Response, limit: int = 6, db: AsyncSessio
             average_score=m.average_score,
             similarity_score=0.95,
             llm_reasoning=None,
+            is_nsfw=m.is_nsfw,
             category_badge=badge
         ) for m, badge in selected_items
     ]
@@ -195,6 +202,7 @@ async def get_trending_manga(
                   coverImage { extraLarge large }
                   bannerImage
                   siteUrl
+                  isAdult
                 }
               }
             }
@@ -225,7 +233,30 @@ async def get_trending_manga(
                     if not media_list:
                         logger.debug("AniList trending returned empty media list for filters (page=%s, limit=%s, country=%s, genre=%s)", page, limit, country_code, genre_clean)
                     else:
+                        # `id` is the local PK everywhere else in the API, so map
+                        # each AniList id to the catalog row when we have one and
+                        # expose the provider id only as `anilist_id`.
+                        anilist_ids = [m.get("id") for m in media_list if m.get("id")]
+                        local_ids: Dict[int, int] = {}
+                        if anilist_ids:
+                            rows = await db.execute(
+                                select(Manga.anilist_id, Manga.id).where(
+                                    Manga.anilist_id.in_(anilist_ids)
+                                )
+                            )
+                            local_ids = {al: pk for al, pk in rows.all() if al is not None}
                         for item in media_list:
+                            # The live AniList path is public: never surface an
+                            # adult title. The decision comes from the same
+                            # helper as the stored filter (safety.py), not a
+                            # provider flag check invented here.
+                            item_nsfw = resolve_is_nsfw(
+                                is_adult=item.get("isAdult"),
+                                genres=item.get("genres"),
+                                tags=item.get("tags"),
+                            )
+                            if item_nsfw:
+                                continue
                             t = item.get("title", {})
                             title_str = t.get("english") or t.get("romaji") or t.get("native") or "Unknown Title"
                             cover = item.get("coverImage", {})
@@ -235,7 +266,7 @@ async def get_trending_manga(
                                 synopsis_clean = re.sub(r'<[^>]+>', '', synopsis_clean)
 
                             trending_results.append(RecommendationResult(
-                                id=item.get("id"),
+                                id=local_ids.get(item.get("id")),
                                 anilist_id=item.get("id"),
                                 mal_id=item.get("idMal"),
                                 title=title_str,
@@ -250,7 +281,8 @@ async def get_trending_manga(
                                 volumes=item.get("volumes"),
                                 average_score=item.get("averageScore"),
                                 similarity_score=None,
-                                llm_reasoning=None
+                                llm_reasoning=None,
+                                is_nsfw=item_nsfw,
                             ))
                         logger.info("AniList trending fetched %d results (live)", len(trending_results))
                 elif resp.status_code == 429:
@@ -281,6 +313,7 @@ async def get_trending_manga(
         from_db_fallback = True
         where_clauses: List[Any] = [
             Manga.cover_image_url.isnot(None),
+            sa_text(safety_filter()),
         ]
 
         # Prefer partition pruning: constrain start_year when possible; also include releasing titles
@@ -340,7 +373,8 @@ async def get_trending_manga(
                 volumes=m.volumes,
                 average_score=m.average_score,
                 similarity_score=None,
-                llm_reasoning=None
+                llm_reasoning=None,
+                is_nsfw=m.is_nsfw,
             ) for m in mangas
         ]
         if trending_results:
@@ -399,7 +433,7 @@ async def get_similar_manga(manga_id: int, response: Response, limit: int = 6, a
             sm_id = item["id"]
             sm = sim_mangas_map.get(sm_id)
             if sm and sm.id != manga_id:
-                if not allow_nsfw and sm.genres and any(g in ['Hentai', 'Erotica'] for g in sm.genres):
+                if not allow_nsfw and row_is_nsfw(sm):
                     continue
                 candidates.append({
                     "manga": sm,
@@ -431,6 +465,7 @@ async def get_similar_manga(manga_id: int, response: Response, limit: int = 6, a
             synopsis=m.synopsis,
             genres=m.genres,
             similarity_score=c["similarity_score"],
+            is_nsfw=m.is_nsfw,
             llm_reasoning=None  # No LLM for this fast endpoint
         ))
         

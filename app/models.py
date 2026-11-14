@@ -30,7 +30,10 @@ class RouletteRequest(BaseModel):
     limit: int = 40
 
 class RecommendationResult(BaseModel):
-    id: int
+    # Local database PK. None only for a live provider row (for example a
+    # trending title the catalog has not ingested yet); callers must check for
+    # it before using the id in a local-only endpoint such as /manga/{id}/similar.
+    id: Optional[int] = None
     anilist_id: Optional[int] = None
     mal_id: Optional[int] = None
     title: str
@@ -50,6 +53,7 @@ class RecommendationResult(BaseModel):
     format_type: Optional[str] = None
     alternative_titles: Optional[List[str]] = None
     inferred_tags: Optional[List[Dict[str, Any]]] = None
+    is_nsfw: Optional[bool] = None
 
 class RecommendResponse(BaseModel):
     results: List[RecommendationResult]
@@ -57,6 +61,10 @@ class RecommendResponse(BaseModel):
     query_embedding_ms: Optional[float] = None
     retrieval_ms: Optional[float] = None
     llm_ms: Optional[float] = None
+    # Declared so the values the router already computes reach the client
+    # instead of being silently dropped by response_model validation.
+    total_duration_ms: Optional[float] = None
+    has_more: bool = False
 
 class MangaDetail(BaseModel):
     id: int
@@ -79,6 +87,7 @@ class MangaDetail(BaseModel):
     cover_image_url: Optional[str] = None
     banner_image: Optional[str] = None
     site_url: Optional[str] = None
+    is_nsfw: Optional[bool] = None
 
     class Config:
         from_attributes = True
