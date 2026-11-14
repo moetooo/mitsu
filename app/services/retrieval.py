@@ -426,14 +426,17 @@ def infer_format_type(*args, **kwargs) -> str:
     return _infer_format_type(*args, **kwargs)
 
 
-async def find_matched_title(
+async def find_exact_title(
     session: AsyncSession,
     query: Optional[str] = None
 ) -> Optional[Tuple[int, str, List[float], float]]:
-    """
-    Identifies if a search query targets a specific manga title (including typos/misspellings)
-    using exact matching, prefix matching, and trigram/word similarity via pg_trgm GIN indexes.
-    Returns (manga_id, matched_title, embedding_list, match_score) or None.
+    """Resolve a query that is *exactly* a title (or alternative title).
+
+    This is the only branch that is allowed to replace the search. Typing a
+    title verbatim is an unambiguous intent, and the lookup is one indexed
+    query, so keeping it as a fast path costs nothing.
+
+    Returns (manga_id, matched_title, embedding_list, 1.0) or None.
     """
     if not query or not query.strip():
         return None
@@ -441,7 +444,6 @@ async def find_matched_title(
     if len(clean_q) < 3:
         return None
 
-    # 1. Exact title match (case-insensitive)
     res = await session.execute(text("""
         SELECT id, title_english, title_romaji, embedding::real[], popularity
         FROM manga
@@ -465,6 +467,35 @@ async def find_matched_title(
             return exact[0], exact[1] or exact[2], exact[3], 1.0
         except Exception:
             pass
+    return None
+
+
+async def find_title_suggestion(
+    session: AsyncSession,
+    query: Optional[str] = None
+) -> Optional[Tuple[int, str, List[float], float]]:
+    """Look for a *close* title to offer alongside a thematic search.
+
+    This used to be `find_matched_title`, and its result *replaced* the search:
+    "monster hunting" resolved to *Monster Hunter* and the thematic results
+    were never computed. Five measured thematic phrases were hijacked this way
+    (`monster hunting`, `time travel`, `romance between rivals`,
+    `isekai with a weak protagonist`, `villainess reincarnation`).
+
+    Raising the threshold instead was measured and rejected: `sim >= 0.75`
+    clears all five hijacks but loses 3 of 8 misspellings.
+
+    The honest fix is to stop choosing for the user. This function still
+    tolerates typos, but its answer is now a *suggestion* shown next to the
+    real thematic results, never a replacement for them.
+
+    Returns (manga_id, matched_title, embedding_list, match_score) or None.
+    """
+    if not query or not query.strip():
+        return None
+    clean_q = query.strip().lower()
+    if len(clean_q) < 3:
+        return None
 
     # 2. Fast Trigram / word similarity match using GIN indexes
     # One round-trip and transaction-local, so pooled connections never inherit these.

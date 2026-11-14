@@ -226,3 +226,95 @@ async def test_unfiltered_draws_are_not_all_one_source():
         f"draws carry a MangaDex id {mean_share:.2f} of the time but the catalogue is "
         f"{float(baseline):.2f}; the sample is one ingest batch, not the catalogue"
     )
+
+
+# ---------------------------------------------------------------------------
+# Stage 5C -- the title *suggestion* replaces the title *shortcut* (SVC-12)
+# ---------------------------------------------------------------------------
+
+HIJACKED_THEMATIC = [
+    "monster hunting",
+    "time travel",
+    "romance between rivals",
+    "isekai with a weak protagonist",
+    "villainess reincarnation",
+]
+
+MISSPELLINGS = [
+    "bersrk",
+    "tokyo revenger",
+    "one peice",
+    "narutto",
+    "death ntoe",
+    "attack on titen",
+    "fullmetal alchemst",
+    "chainsaw mann",
+]
+
+
+def test_title_suggestion_model_is_optional_and_serialisable():
+    """The new field must not break a response that has no suggestion."""
+    from app.models import RecommendResponse, TitleSuggestion
+
+    bare = RecommendResponse(results=[])
+    assert bare.title_suggestion is None
+    assert bare.model_dump()["title_suggestion"] is None
+
+    with_sug = RecommendResponse(
+        results=[],
+        title_suggestion=TitleSuggestion(id=7, title="Berserk", match_score=0.91),
+    )
+    dumped = with_sug.model_dump()["title_suggestion"]
+    assert dumped["id"] == 7
+    assert dumped["title"] == "Berserk"
+    assert dumped["match_score"] == pytest.approx(0.91)
+
+
+@pytest.mark.requires_catalog
+@pytest.mark.asyncio
+async def test_thematic_phrases_no_longer_take_the_exact_title_path():
+    """The five phrases that used to be hijacked must not resolve exactly.
+
+    They are answered by the thematic search now; the close title is only a
+    suggestion. If any of these starts returning an exact match again, the
+    hijack is back.
+    """
+    from app.services.retrieval import find_exact_title
+
+    async with AsyncSessionLocal() as db:
+        hijacked = []
+        for query in HIJACKED_THEMATIC:
+            if await find_exact_title(db, query) is not None:
+                hijacked.append(query)
+    assert not hijacked, f"thematic queries resolved as exact titles again: {hijacked}"
+
+
+@pytest.mark.requires_catalog
+@pytest.mark.asyncio
+async def test_misspellings_still_produce_a_suggestion():
+    """Typo tolerance is delivered as a suggestion, and must not be lost.
+
+    Raising the similarity threshold to kill the five hijacks was measured to
+    cost 3 of these 8; offering a suggestion instead costs none of them.
+    """
+    from app.services.retrieval import find_title_suggestion
+
+    async with AsyncSessionLocal() as db:
+        found = []
+        for query in MISSPELLINGS:
+            hit = await find_title_suggestion(db, query)
+            if hit is not None:
+                found.append(query)
+    assert len(found) >= 7, f"misspelling suggestions lost: only {found} of {MISSPELLINGS}"
+
+
+@pytest.mark.requires_catalog
+@pytest.mark.asyncio
+async def test_exact_titles_still_resolve_without_a_search():
+    """The exact fast path survives, so typing a real title costs one lookup."""
+    from app.services.retrieval import find_exact_title
+
+    async with AsyncSessionLocal() as db:
+        for query in ("berserk", "one piece", "naruto"):
+            hit = await find_exact_title(db, query)
+            assert hit is not None, f"{query} no longer resolves exactly"

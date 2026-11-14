@@ -58,6 +58,23 @@ class RecommendationResult(BaseModel):
     inferred_tags: Optional[List[Dict[str, Any]]] = None
     is_nsfw: Optional[bool] = None
 
+class TitleSuggestion(BaseModel):
+    """A close title offered *beside* thematic results, never instead of them.
+
+    Thematic searches used to be silently replaced by a fuzzy title hit, so
+    "monster hunting" returned *Monster Hunter* and nothing else. This carries
+    the same hit as an affordance the user can choose: the results answer the
+    phrase they typed, and this answers "or did you mean this title?".
+    """
+    id: int
+    title: str
+    cover_image_url: Optional[str] = None
+    format_type: Optional[str] = None
+    start_year: Optional[int] = None
+    # The trigram match_score behind the suggestion, so the client can rank or
+    # suppress it rather than trusting every hit equally.
+    match_score: Optional[float] = None
+
 class RecommendResponse(BaseModel):
     results: List[RecommendationResult]
     corrected_query: Optional[str] = None
@@ -68,6 +85,10 @@ class RecommendResponse(BaseModel):
     # instead of being silently dropped by response_model validation.
     total_duration_ms: Optional[float] = None
     has_more: bool = False
+    # Present only when a confident close title exists for a query that was
+    # answered thematically. An exact-title query returns results *about* the
+    # title instead and does not need this.
+    title_suggestion: Optional[TitleSuggestion] = None
 
 class MangaDetail(BaseModel):
     id: int
