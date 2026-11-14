@@ -579,8 +579,12 @@ export default function App() {
         onOpenSettings={() => setIsSettingsOpen(true)}
       />
 
+      {/* FE-24: no `key={activeTab}`. It re-created the whole tab subtree on every
+          switch, which threw away state that lived below it (and used to re-seed
+          SurpriseView's own queue). Conditional rendering already swaps the
+          content; the one thing lost is replaying the fade-in per switch, which
+          is cheaper than the remount it paid for. */}
       <div 
-        key={activeTab}
         className={`animate-tab-fade-in max-w-7xl mx-auto px-4 md:px-8 ${
         activeTab === 'surprise' ? 'py-0 h-[calc(100vh-76px)] overflow-hidden flex flex-col items-center justify-center' : 'py-6 space-y-8'
       }`}>
