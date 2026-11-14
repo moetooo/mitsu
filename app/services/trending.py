@@ -80,11 +80,15 @@ def build_query(fmt: Optional[str], genre: Optional[str]) -> tuple[Any, Dict[str
     where_clauses: List[Any] = [
         Manga.cover_image_url.isnot(None),
         sa_text(safety_filter()),
-        # Prefer recent and ongoing titles. The catalogue is 99.8% post-2000, so
-        # this mostly guards against a stale pre-2020 classic outranking a
-        # currently-publishing series on a product of popularity and score.
-        (Manga.start_year >= 2020)
-        | ((Manga.status == "RELEASING") & Manga.start_year.isnot(None)),
+        # No recency **filter** (API-19). This used to require `start_year >= 2020`
+        # (or RELEASING), which is a ranking intent expressed as a WHERE clause,
+        # and it does not do that job: it hides 7 of the all-time top 10 by
+        # popularity x score -- Chainsaw Man, Solo Leveling, Jujutsu Kaisen,
+        # Attack on Titan, Tokyo Ghoul, Demon Slayer, Oyasumi Punpun -- and keeps
+        # only 36.6% of the catalogue (34,977 rows), so a filtered query can also
+        # answer "nothing" for a genre that simply has no recent hits. If freshness
+        # should matter to the ranking, it belongs in the ORDER BY as a weight,
+        # where it can reorder rows instead of deleting them.
     ]
     params: Dict[str, Any] = {}
     used_filters = True
