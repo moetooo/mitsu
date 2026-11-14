@@ -9,7 +9,7 @@ from brotli_asgi import BrotliMiddleware
 from sqlalchemy import text
 from .routers import recommend, manga, search, admin
 from .middleware.rate_limit import RateLimitMiddleware
-from .services.embedding import generate_embedding
+from .services.embedding import generate_embedding, shutdown_embedding
 from .services.cache import redis_client
 from .db import engine, AsyncSessionLocal
 from .core.schema import verify_schema
@@ -51,6 +51,12 @@ async def lifespan(app: FastAPI):
         logger.info("Redis connection pool closed.")
     except Exception as e:
         logger.warning("Error closing Redis client: %s", e)
+    try:
+        # SVC-07: release the fastembed weights and their worker threads.
+        shutdown_embedding()
+        logger.info("Embedding model and thread pool released.")
+    except Exception as e:
+        logger.warning("Error releasing embedding resources: %s", e)
 
 app = FastAPI(title="Mitsu API", lifespan=lifespan)
 
