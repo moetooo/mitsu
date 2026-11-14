@@ -20,13 +20,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
-from app.services.retrieval import (
+from app.services.format import build_format_sql_condition
+from app.services.query_filters import build_genre_sql_condition
+from app.services.retrieval import retrieve_similar_manga
+from app.services.tag_alignment import (
     DEFAULT_CATEGORY_WEIGHTS,
-    compute_category_aware_tag_alignment,
     build_tag_alignment_sql,
-    build_format_sql_condition,
-    build_genre_sql_condition,
-    retrieve_similar_manga
+    compute_category_aware_tag_alignment,
 )
 from app.models import RecommendFilters
 

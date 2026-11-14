@@ -221,3 +221,106 @@ def test_routers_do_not_execute_statements():
 def test_catalogue_reads_are_importable_without_a_database(module):
     """The modules the routers now delegate to must not need a connection to load."""
     __import__(module)
+
+
+# ---------------------------------------------------------------------------
+# ARCH-10 - no service module is a god module, and each one owns its functions
+# ---------------------------------------------------------------------------
+
+SERVICES_ROOT = APP_ROOT / "services"
+
+#: `retrieval.py` was 1,159 lines and held six responsibilities. The split is
+#: only useful if it stays split, so the owner of each function is pinned here:
+#: a name that reappears in `retrieval.py` as a convenience re-export recreates
+#: the thing that was removed (two homes for one rule).
+SERVICE_OWNERS = {
+    "app.services.query_filters": [
+        "build_genre_sql_condition",
+        "apply_filter_criteria",
+        "generate_filter_hash",
+    ],
+    "app.services.tag_alignment": [
+        "DEFAULT_CATEGORY_WEIGHTS",
+        "compute_category_aware_tag_alignment",
+        "build_tag_alignment_sql",
+    ],
+    "app.services.title_match": [
+        "is_confident_title_match",
+        "find_exact_title",
+        "find_title_suggestion",
+    ],
+    "app.services.diversity": [
+        "franchise_key",
+        "apply_diversity_filtering",
+    ],
+    "app.services.roulette": [
+        "sample_candidates_from_db",
+        "retrieve_roulette_manga",
+    ],
+    "app.services.retrieval": [
+        "apply_ann_settings",
+        "compute_pool_limit",
+        "similar_edges_are_fresh",
+        "retrieve_similar_manga",
+    ],
+}
+
+#: The ceiling is deliberately generous: it is a tripwire for a module growing
+#: back into a god module, not a style rule.
+SERVICE_LINE_CEILING = 500
+
+
+@pytest.mark.parametrize("module", sorted(SERVICE_OWNERS))
+def test_each_split_module_owns_its_functions(module):
+    """Every name in the owner map is defined by that module, not re-exported."""
+    imported = __import__(module, fromlist=["_"])
+    missing = [name for name in SERVICE_OWNERS[module] if not hasattr(imported, name)]
+    assert not missing, f"{module} does not define {missing} (ARCH-10)"
+
+
+def _defined_names(module: str) -> set[str]:
+    """Names *defined* by a module's own source (imports do not count)."""
+    path = SERVICES_ROOT / (module.split(".")[-1] + ".py")
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    names: set[str] = set()
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            )
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names
+
+
+def test_the_moved_names_have_one_home():
+    """A name may only be *defined* in its owner module: one rule, one home.
+
+The check reads the source with `ast` rather than `hasattr`, because
+    `retrieval` legitimately *imports* `apply_filter_criteria` — importing is how
+    a module uses a rule, defining it twice is how the rule drifts.
+    """
+    homes: dict[str, list[str]] = {}
+    for module, names in SERVICE_OWNERS.items():
+        defined = _defined_names(module)
+        for name in names:
+            assert name in defined, f"{module} does not define {name} (ARCH-10)"
+            homes.setdefault(name, []).append(module)
+
+    duplicated = [f"{name}: {', '.join(modules)}" for name, modules in homes.items() if len(modules) > 1]
+    assert not duplicated, "one name, two homes (ARCH-10): " + "; ".join(duplicated)
+
+
+def test_no_service_module_exceeds_the_line_ceiling():
+    oversized = [
+        f"{path.name}: {len(path.read_text(encoding='utf-8').splitlines())} lines"
+        for path in sorted(SERVICES_ROOT.glob("*.py"))
+        if "__pycache__" not in path.parts
+        and len(path.read_text(encoding="utf-8").splitlines()) > SERVICE_LINE_CEILING
+    ]
+    assert not oversized, (
+        f"a service module grew past {SERVICE_LINE_CEILING} lines; split it rather "
+        "than growing it (ARCH-10). " + "; ".join(oversized)
+    )

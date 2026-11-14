@@ -12,12 +12,9 @@ from ..models import (
 from ..services import catalog
 from ..db import get_db
 from ..services.embedding import generate_embedding
-from ..services.retrieval import (
-    retrieve_similar_manga,
-    retrieve_roulette_manga,
-    find_exact_title,
-    find_title_suggestion,
-)
+from ..services.retrieval import retrieve_similar_manga
+from ..services.roulette import retrieve_roulette_manga
+from ..services.title_match import find_exact_title, find_title_suggestion
 from ..services.llm import generate_reasoning
 from ..services.cache import get_cached, set_cached, generate_cache_key
 from ..services.search_autocorrect import autocorrect_query

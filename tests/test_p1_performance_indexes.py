@@ -2,7 +2,7 @@ import os, sys
 import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from app.db_models import Manga, RecommendationsEdge, DiscoveryQueue
-from app.services.retrieval import build_genre_sql_condition
+from app.services.query_filters import build_genre_sql_condition
 from pathlib import Path
 
 BASELINE = Path(__file__).resolve().parent.parent / "migrations" / "versions" / "0001_baseline.py"
@@ -47,6 +47,16 @@ def test_ann_ordering():
     assert "ORDER BY embedding <=> CAST(:emb AS vector)" in s and "pool_limit" in s
 
 def test_no_per_request_set():
-    import inspect, app.services.retrieval as r
-    s = inspect.getsource(r)
-    assert "SET pg_trgm" not in s and "set_config('pg_trgm" in s
+    """The pg_trgm thresholds must be transaction-local, never a session-wide SET.
+
+    The statement lives in `title_match.find_title_suggestion` since the ARCH-10
+    split, so the check follows it there; `retrieval` is checked too, because a
+    connect-time SET reappearing in the ranking module would be the same bug.
+    """
+    import inspect
+    import app.services.retrieval as retrieval
+    import app.services.title_match as title_match
+
+    sources = inspect.getsource(title_match) + inspect.getsource(retrieval)
+    assert "SET pg_trgm" not in sources
+    assert "set_config('pg_trgm" in inspect.getsource(title_match)
