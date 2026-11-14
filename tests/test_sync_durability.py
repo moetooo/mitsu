@@ -12,6 +12,8 @@ Four holes, one test file:
   malformed or the embedding provider hiccupped, and counted nothing.
 """
 
+import asyncio
+
 from datetime import datetime, timezone
 
 import pytest
@@ -22,7 +24,7 @@ from app.db_models import Manga
 from app.ingestion import ingest
 from app.sync import service as sync_service
 from app.sync.identity import ExternalId, attach_external_ids, find_match
-from app.sync.schema import ensure_sync_schema
+from app.sync.schema import verify_schema
 
 CHECKPOINT = datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)
 
@@ -56,7 +58,7 @@ async def _wipe(*anilist_ids: int) -> None:
 
 @pytest.fixture
 async def sync_schema():
-    await ensure_sync_schema()
+    await verify_schema()
     yield
 
 
@@ -238,7 +240,7 @@ def test_tag_extraction_survives_malformed_tags():
 
 @pytest.mark.asyncio
 async def test_ingestion_counts_skips_instead_of_dropping_silently(monkeypatch):
-    async def no_init_db():
+    async def no_schema_check():
         return None
 
     async def fake_fetch_page(**kwargs):
@@ -258,7 +260,7 @@ async def test_ingestion_counts_skips_instead_of_dropping_silently(monkeypatch):
     async def fake_upsert(session, record):
         upserted.append(record)
 
-    monkeypatch.setattr(ingest, "init_db", no_init_db)
+    monkeypatch.setattr(ingest, "verify_schema", no_schema_check)
     monkeypatch.setattr(ingest, "fetch_page", fake_fetch_page)
     monkeypatch.setattr(ingest, "generate_embedding", failing_embedding)
     monkeypatch.setattr(ingest, "anilist_to_record", lambda raw: {
@@ -275,3 +277,55 @@ async def test_ingestion_counts_skips_instead_of_dropping_silently(monkeypatch):
     assert skipped["embed_failed"] == 1, "a failed embedding must be counted"
     assert len(upserted) == 1, "the title is still worth keeping without a vector"
     assert "embedding" not in upserted[0], "no vector should be stored when embedding failed"
+
+
+# --- PIPE-10 ---------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ingestion_is_page_capped(monkeypatch):
+    """A provider that always claims another page must not loop forever.
+
+    The old loop was `while True`, bounded only by the provider's `hasNextPage`,
+    so a stale flag kept spending budget for as long as the process ran.
+    """
+    async def no_schema_check():
+        return None
+
+    calls: list[int] = []
+
+    async def always_more(**kwargs):
+        calls.append(kwargs["page"])
+        return {
+            "media": [{"id": 9_999_9100 + kwargs["page"], "format": "MANGA"}],
+            "pageInfo": {"hasNextPage": True},
+        }
+
+    async def fake_embedding(text_to_embed: str) -> list[float]:
+        return [0.0] * 384
+
+    async def fake_upsert(session, record):
+        return None
+
+    monkeypatch.setattr(ingest, "verify_schema", no_schema_check)
+    monkeypatch.setattr(ingest, "fetch_page", always_more)
+    monkeypatch.setattr(ingest, "generate_embedding", fake_embedding)
+    monkeypatch.setattr(ingest, "upsert_manga", fake_upsert)
+    monkeypatch.setattr(ingest, "anilist_to_record", lambda raw: {
+        "anilist_id": raw["id"],
+        "title_romaji": "Capped",
+        "tags": [],
+        "synopsis": "",
+    })
+    # The run sleeps 1.5s between pages; keep the assertion fast without
+    # patching the module the test itself uses to await.
+    real_sleep = asyncio.sleep
+
+    async def fast_sleep(_seconds):
+        await real_sleep(0)
+
+    monkeypatch.setattr(asyncio, "sleep", fast_sleep)
+
+    await ingest.run_ingestion(start_year=2000, end_year=2000, max_pages_per_year=3)
+
+    assert calls == [1, 2, 3], f"the loop must stop at the cap, saw pages {calls}"

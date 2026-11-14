@@ -12,7 +12,7 @@ from .middleware.rate_limit import RateLimitMiddleware
 from .services.embedding import generate_embedding
 from .services.cache import redis_client
 from .db import engine, AsyncSessionLocal
-from .sync.schema import ensure_sync_schema
+from .sync.schema import verify_schema
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,12 +30,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning("FastEmbed model pre-warming warning: %s", e)
 
-    # Additive, idempotent sync schema. Safe on every start; no catalog rewrite.
+    # Read-only readiness check. Schema changes belong to Alembic (`alembic
+    # upgrade head`); nothing here writes DDL at startup any more (ARCH-03).
     try:
-        await ensure_sync_schema()
-        logger.info("Sync schema ready.")
+        await verify_schema()
+        logger.info("Schema is at the revision this build expects.")
     except Exception as e:
-        logger.warning("Sync schema setup warning: %s", e)
+        logger.warning("Schema check: %s", e)
 
     yield
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import os
 from functools import lru_cache
+from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
@@ -59,9 +60,9 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 REDIS_IS_ISOLATED = (urlparse(os.environ["REDIS_URL"]).path.lstrip("/") or "0") == "15"
 
 from app.config import settings  # noqa: E402  (import after env redirect)
-from app.db import Base, engine  # noqa: E402
+from app.db import engine  # noqa: E402
 from app.services.cache import redis_client  # noqa: E402
-import app.db_models  # noqa: E402,F401  (registers the tables on Base.metadata)
+import app.db_models  # noqa: E402,F401  (registers the tables the migrations create)
 
 # Truncated between tests, children first via CASCADE.
 _APP_TABLES = (
@@ -86,9 +87,18 @@ def _database_name() -> str:
 
 
 def _bootstrap_database() -> None:
-    """Create the test database and its schema if they are missing."""
+    """Create the test database and bring it to `alembic upgrade head`.
 
-    async def run() -> None:
+    The suite builds its schema through the same migrations a deployment runs,
+    so a revision that is broken for a real database fails here first instead of
+    being noticed after a release.
+
+    The three phases are separate `asyncio.run` calls on purpose: Alembic's own
+    environment calls `asyncio.run` internally, and nesting it inside a running
+    loop raises RuntimeError.
+    """
+
+    async def create_database() -> None:
         admin = create_async_engine(_server_url(), isolation_level="AUTOCOMMIT")
         try:
             async with admin.connect() as conn:
@@ -106,28 +116,45 @@ def _bootstrap_database() -> None:
             async with target.begin() as conn:
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                 await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
-                await conn.run_sync(Base.metadata.create_all)
-                # Columns the sync job owns; ensure_sync_schema() uses the same
-                # additive path against a real deployment.
-                for column, sql_type in (
-                    ("source_updated_at", "TIMESTAMPTZ"),
-                    ("last_synced_at", "TIMESTAMPTZ"),
-                    ("sync_source", "VARCHAR(32)"),
-                    ("similarities_computed_at", "TIMESTAMPTZ"),
-                    ("is_nsfw", "BOOLEAN NOT NULL DEFAULT false"),
-                ):
-                    await conn.execute(
-                        text(f"ALTER TABLE manga ADD COLUMN IF NOT EXISTS {column} {sql_type}")
-                    )
-                if OWNS_TEST_DATABASE:
-                    # A previous crashed run must not leak rows into this one.
-                    await conn.execute(
-                        text(f"TRUNCATE {', '.join(_APP_TABLES)} RESTART IDENTITY CASCADE")
-                    )
         finally:
             await target.dispose()
 
-    asyncio.run(run())
+    async def truncate() -> None:
+        if not OWNS_TEST_DATABASE:
+            return
+        target = create_async_engine(TEST_DATABASE_URL)
+        try:
+            async with target.begin() as conn:
+                # A previous crashed run must not leak rows into this one.
+                await conn.execute(
+                    text(f"TRUNCATE {', '.join(_APP_TABLES)} RESTART IDENTITY CASCADE")
+                )
+        finally:
+            await target.dispose()
+
+    asyncio.run(create_database())
+    # Migrations own the schema. `upgrade head` is idempotent, so a database
+    # created by an older run is simply brought forward.
+    _upgrade_to_head(TEST_DATABASE_URL)
+    asyncio.run(truncate())
+
+
+def _upgrade_to_head(url: str) -> None:
+    from alembic import command
+    from alembic.config import Config
+
+    root = Path(__file__).resolve().parent.parent
+    config = Config(str(root / "alembic.ini"))
+    config.set_main_option("script_location", str(root / "migrations"))
+    previous = os.environ.get("ALEMBIC_DATABASE_URL")
+    os.environ["ALEMBIC_DATABASE_URL"] = url
+    try:
+        command.upgrade(config, "head")
+    finally:
+        if previous is None:
+            os.environ.pop("ALEMBIC_DATABASE_URL", None)
+        else:
+            os.environ["ALEMBIC_DATABASE_URL"] = previous
 
 
 @lru_cache(maxsize=1)

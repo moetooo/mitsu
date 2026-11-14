@@ -9,7 +9,11 @@ import pytest
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from app.db_models import Manga
-from scripts.migrate_p3_indexes import MIGRATION_STATEMENTS
+from pathlib import Path
+
+SEARCH_INDEXES_REVISION = (
+    Path(__file__).resolve().parent.parent / "migrations" / "versions" / "0003_search_indexes.py"
+)
 
 
 def test_manga_model_has_p3_indexes():
@@ -41,15 +45,17 @@ def test_manga_model_has_p3_indexes():
     assert idx_hnsw.dialect_options["postgresql"]["with"] == {"m": 16, "ef_construction": 64}
 
 
-def test_migration_statements_completeness():
-    """Verify migration statements list covers all required operations."""
-    sqls = [sql for _, sql in MIGRATION_STATEMENTS]
-    full_sql = " ".join(sqls)
+def test_search_index_revision_is_the_only_builder():
+    """The indexes are built once by Alembic (ARCH-03/PIPE-10), not per ingestion run."""
+    sql = SEARCH_INDEXES_REVISION.read_text(encoding="utf-8")
 
-    assert "CREATE EXTENSION IF NOT EXISTS pg_trgm;" in full_sql
-    assert "DROP INDEX IF EXISTS idx_manga_embedding;" in full_sql
-    assert "idx_manga_embedding_hnsw" in full_sql
-    assert "hnsw (embedding vector_cosine_ops)" in full_sql
-    assert "idx_manga_title_english_trgm" in full_sql
-    assert "idx_manga_title_romaji_trgm" in full_sql
-    assert "idx_manga_title_native_trgm" in full_sql
+    assert "CREATE EXTENSION IF NOT EXISTS pg_trgm" in sql
+    assert "idx_manga_embedding_hnsw" in sql
+    assert "hnsw (embedding vector_cosine_ops)" in sql
+    assert "CONCURRENTLY" in sql, "building these on a live catalog must not lock writes"
+    for name in ("idx_manga_title_english_trgm", "idx_manga_title_romaji_trgm", "idx_manga_title_native_trgm"):
+        assert name in sql
+
+    # The legacy IVFFlat index is gone; re-dropping it on every run was PIPE-10.
+    import app.ingestion.ingest as ingest
+    assert "DROP INDEX" not in Path(ingest.__file__).read_text(encoding="utf-8")

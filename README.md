@@ -34,9 +34,18 @@ docker compose up -d
 # Activate virtualenv & install requirements
 pip install -r requirements.txt
 
+# Create/upgrade the schema (Alembic owns the schema; nothing does it at startup)
+alembic upgrade head
+
 # Launch FastAPI dev server
 uvicorn app.main:app --reload
 ```
+
+`alembic upgrade head` is the only way to change a table. An existing database
+that predates migrations should be brought in with `alembic stamp <revision>`
+instead of replaying the baseline. The app does not write DDL: it verifies the
+database is at a revision it can use and logs `alembic upgrade head` if not.
+Details: `docs/MIGRATIONS.md`.
 
 ### 3. Start Frontend UI
 ```bash
@@ -51,7 +60,7 @@ external scheduler. It caps AniList at 30 requests/day and never inserts a known
 external ID twice.
 
 ```bash
-python -m app.sync.cli migrate
+python -m app.sync.cli migrate   # verify schema + seed external ids
 python -m app.sync.cli run --dry-run --max-pages 1
 python -m app.sync.cli run --mode manual --max-pages 3
 python -m app.sync.cli backfill --until 2026-08-06T19:43:15+00:00 --max-pages 25
