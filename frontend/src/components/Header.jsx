@@ -60,9 +60,11 @@ export default function Header({
         </div>
 
         {/* Navigation Tabs (Centered) */}
-        <nav className="absolute left-1/2 -translate-x-1/2 flex items-center bg-[var(--surface-color)] border border-[var(--border-color)] rounded-full p-1 transition-colors shadow-sm">
+        <nav aria-label="Primary" className="absolute left-1/2 -translate-x-1/2 flex items-center bg-[var(--surface-color)] border border-[var(--border-color)] rounded-full p-1 transition-colors shadow-sm">
           <button
             onClick={() => handleTab('explore')}
+            type="button"
+            aria-current={activeTab === 'explore' ? 'page' : undefined}
             className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
               activeTab === 'explore'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
@@ -77,6 +79,8 @@ export default function Header({
 
           <button
             onClick={() => handleTab('trending')}
+            type="button"
+            aria-current={activeTab === 'trending' ? 'page' : undefined}
             className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
               activeTab === 'trending'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
@@ -92,6 +96,8 @@ export default function Header({
 
           <button
             onClick={() => handleTab('surprise')}
+            type="button"
+            aria-current={activeTab === 'surprise' ? 'page' : undefined}
             className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
               activeTab === 'surprise'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
@@ -106,6 +112,8 @@ export default function Header({
 
           <button
             onClick={() => handleTab('bookmarks')}
+            type="button"
+            aria-current={activeTab === 'bookmarks' ? 'page' : undefined}
             className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer relative ${
               activeTab === 'bookmarks'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'

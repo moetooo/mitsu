@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 import CoverFallback from './CoverFallback';
+import useEscapeLayer from '../hooks/useEscapeLayer';
 
 function SurpriseCoverImage({ url, title, allowHover }) {
   const isCached = isCoverCached(url);
@@ -88,6 +89,10 @@ export default function SurpriseView({
   // Diptych Folio Full Details state & responsive breakpoint
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 820 : true));
+
+  // FE-08: the details pane is an Escape layer, so it yields to a layer opened
+  // above it (the detail modal) instead of closing alongside it.
+  useEscapeLayer(isDetailsOpen, () => setIsDetailsOpen(false));
 
   // Idle navigation hint state: shows ONLY when inactive for 60 seconds
   const [showHint, setShowHint] = useState(false);
@@ -387,17 +392,13 @@ export default function SurpriseView({
     };
   }, [handleNext, handlePrev, resetIdleHintTimer]);
 
-  // Keyboard navigation (Arrow keys, PageUp/Down, J/K, Escape)
+  // Keyboard navigation (Arrow keys, PageUp/Down, J/K). Escape is not handled
+  // here any more: it belongs to the topmost overlay layer (useEscapeLayer).
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
-
-      if (e.key === 'Escape') {
-        if (isDetailsOpen) {
-          setIsDetailsOpen(false);
-          return;
-        }
-      }
+      // An overlay on top of this view owns the keyboard while it is open.
+      if (e.target?.closest?.('[role="dialog"]')) return;
 
       if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'j') {
         e.preventDefault();
@@ -412,7 +413,7 @@ export default function SurpriseView({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleNext, handlePrev, resetIdleHintTimer, isDetailsOpen]);
+  }, [handleNext, handlePrev, resetIdleHintTimer]);
 
   // Touch swipe support on card
   const handleTouchStart = (e) => {
@@ -742,7 +743,11 @@ export default function SurpriseView({
   // Empty or Loading state with aesthetic pulse
   if (titles.length === 0 || (loading && titles.length === 0)) {
     return (
-      <div className="w-full h-full flex flex-col items-center justify-center space-y-3 bg-transparent select-none animate-in fade-in duration-200">
+      <div
+        role="status"
+        aria-live="polite"
+        className="w-full h-full flex flex-col items-center justify-center space-y-3 bg-transparent select-none animate-in fade-in duration-200"
+      >
         <div className={`w-9 h-9 rounded-xl bg-[var(--surface-color)] border border-[var(--border-color)] flex items-center justify-center text-[var(--accent-vermillion)] font-bold text-base shadow-md ${exhausted ? '' : 'animate-pulse'}`}>
           ❖
         </div>

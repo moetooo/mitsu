@@ -220,7 +220,12 @@ export default function MangaGrid({
   // Feature 34: Shimmer Paper Skeleton Grid Loading State
   if (loading && mangas.length === 0) {
     return (
-      <div className={`grid ${GRID_COLS[activeGridSize] || GRID_COLS.standard}`}>
+      <div
+        role="status"
+        aria-live="polite"
+        aria-label="Loading titles"
+        className={`grid ${GRID_COLS[activeGridSize] || GRID_COLS.standard}`}
+      >
         {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
           <div
             key={i}
@@ -236,7 +241,7 @@ export default function MangaGrid({
   if (mangas.length === 0) {
     if (!hasSearched) return null;
     return (
-      <div className="flex flex-col items-center justify-center py-20">
+      <div role="status" aria-live="polite" className="flex flex-col items-center justify-center py-20">
         <p className="text-[var(--text-muted)] font-serif-jp text-lg">No titles found.</p>
       </div>
     );
@@ -266,7 +271,11 @@ export default function MangaGrid({
             <span className="text-[11px] font-mono text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1 hidden md:inline">
               Sort:
             </span>
-            <div className="inline-flex items-center gap-1 bg-[var(--surface-color)] border border-[var(--border-color)] p-1 rounded-full shadow-xs">
+            <div
+              role="group"
+              aria-label="Sort results"
+              className="inline-flex items-center gap-1 bg-[var(--surface-color)] border border-[var(--border-color)] p-1 rounded-full shadow-xs"
+            >
               {[
                 { id: 'best_match', label: 'Best Match' },
                 { id: 'score', label: 'Highest Rating' },
@@ -277,6 +286,7 @@ export default function MangaGrid({
                   key={opt.id}
                   type="button"
                   onClick={() => setSortBy(opt.id)}
+                  aria-pressed={sortBy === opt.id}
                   className={`px-3 py-1 rounded-full text-xs font-mono transition-all cursor-pointer whitespace-nowrap ${sortBy === opt.id
                     ? 'bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
                     : 'text-[var(--text-muted)] hover:text-[var(--text-color)] hover:bg-[var(--bg-color)]/60'
@@ -337,7 +347,11 @@ export default function MangaGrid({
               title="Click to manually load more if auto-scroll is paused"
             >
               {loading ? (
-                <div className="inline-flex items-center px-6 py-2.5 rounded-full bg-[var(--surface-color)] border border-[var(--border-color)] shadow-sm select-none">
+                <div
+                  role="status"
+                  aria-live="polite"
+                  className="inline-flex items-center px-6 py-2.5 rounded-full bg-[var(--surface-color)] border border-[var(--border-color)] shadow-sm select-none"
+                >
                   <span className="text-xs font-mono tracking-wider text-[var(--text-muted)] leading-none">
                     Summoning more titles...
                   </span>
@@ -354,6 +368,7 @@ export default function MangaGrid({
             <button
               onClick={onLoadMore}
               disabled={loading}
+              aria-busy={loading}
               className="px-8 py-3 bg-[var(--surface-color)] hover:border-[var(--accent-vermillion)] border border-[var(--border-color)] text-[var(--text-color)] rounded-full font-serif-jp font-bold text-xs md:text-sm transition-all hover:scale-105 active:scale-95 shadow-sm cursor-pointer disabled:opacity-50"
             >
               {loading ? 'Loading...' : 'Load More Recommendations'}

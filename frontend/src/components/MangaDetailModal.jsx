@@ -1,8 +1,13 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 import CoverFallback from './CoverFallback';
 import { API_ROUTES } from '../config';
+import useScrollLock from '../hooks/useScrollLock';
+import useEscapeLayer from '../hooks/useEscapeLayer';
+import useFocusTrap from '../hooks/useFocusTrap';
+
+const TITLE_ID = 'manga-detail-title';
 
 function SimilarCoverItem({ item, onSelect }) {
   const isCached = isCoverCached(item.cover_image_url);
@@ -82,6 +87,8 @@ export default function MangaDetailModal({
   const [copied, setCopied] = useState(false);
   const [coverLoaded, setCoverLoaded] = useState(() => isCoverCached(manga?.cover_image_url));
   const [coverError, setCoverError] = useState(false);
+  const dialogRef = useRef(null);
+  const isOpen = Boolean(manga);
 
   useEffect(() => {
     setCoverError(false);
@@ -128,22 +135,18 @@ export default function MangaDetailModal({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  useEffect(() => {
-    if (manga) {
-      document.body.style.overflow = 'hidden';
-    }
-    return () => {
-      document.body.style.overflow = 'unset';
-    };
-  }, [manga]);
+  // FE-13: one counted scroll lock, so closing this overlay restores whatever
+  // the page had before instead of forcing `overflow: unset`, and a second open
+  // overlay is not unlocked underneath the user.
+  useScrollLock(isOpen);
 
-  useEffect(() => {
-    const handleKeyDown = (e) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose]);
+  // FE-08: Escape belongs to the topmost layer only. This used to be an
+  // unconditional window listener, so it also fired while a layer above it was
+  // open (and so did the Surprise Me handler, closing both at once).
+  useEscapeLayer(isOpen, onClose);
+
+  // FE-08: focus in on open, Tab stays inside, focus returns to the trigger.
+  useFocusTrap(isOpen, dialogRef);
 
   useEffect(() => {
     // `/manga/{id}/similar` keys on the local database PK. A live provider row
@@ -181,12 +184,20 @@ export default function MangaDetailModal({
   const authorName = manga.author || (manga.staff && manga.staff[0]) || null;
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
+    <div
+      ref={dialogRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby={TITLE_ID}
+      tabIndex={-1}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200 focus:outline-none"
+    >
       
       {/* Backdrop */}
       <div 
         className="absolute inset-0 bg-black/80 backdrop-blur-sm transition-all"
         onClick={onClose}
+        aria-hidden="true"
       />
 
       {/* Feature 314: Atmospheric Dynamic Ambient Glow Sync */}
@@ -255,6 +266,7 @@ export default function MangaDetailModal({
               onClick={onClose}
               className={`p-2 text-[var(--text-muted)] hover:text-[var(--accent-vermillion)] bg-[var(--surface-color)] border border-[var(--border-color)] ${activeHover} rounded-full transition-colors cursor-pointer`}
               title="Close Preview (ESC)"
+              aria-label="Close manga details"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
@@ -354,7 +366,7 @@ export default function MangaDetailModal({
           <div className="p-6 md:p-8 flex flex-col gap-6 flex-grow min-w-0 max-w-full">
             
             <div>
-              <h2 className="text-2xl md:text-4xl font-serif-jp font-bold text-[var(--text-color)] mb-3 leading-snug">
+              <h2 id={TITLE_ID} className="text-2xl md:text-4xl font-serif-jp font-bold text-[var(--text-color)] mb-3 leading-snug">
                 {manga.title}
               </h2>
               

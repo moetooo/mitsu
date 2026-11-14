@@ -624,7 +624,11 @@ export default function App() {
               </div>
 
               {/* Format Origin Sub-Tabs (Aesthetic Floating Capsule) */}
-              <div className="inline-flex max-w-full items-center gap-1 bg-[var(--surface-color)]/80 backdrop-blur-md border border-[var(--border-color)] p-1 rounded-full overflow-x-auto no-scrollbar shadow-xs self-start">
+              <div
+                role="group"
+                aria-label="Trending format"
+                className="inline-flex max-w-full items-center gap-1 bg-[var(--surface-color)]/80 backdrop-blur-md border border-[var(--border-color)] p-1 rounded-full overflow-x-auto no-scrollbar shadow-xs self-start"
+              >
                 {[
                   { id: 'all', label: 'All Formats' },
                   { id: 'manga', label: 'Manga', tag: 'JP' },
@@ -633,7 +637,9 @@ export default function App() {
                 ].map(sub => (
                   <button
                     key={sub.id}
+                    type="button"
                     onClick={() => setTrendingFormat(sub.id)}
+                    aria-pressed={trendingFormat === sub.id}
                     className={`px-3.5 py-1.5 rounded-full text-xs font-mono transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
                       trendingFormat === sub.id
                         ? 'bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
@@ -655,7 +661,11 @@ export default function App() {
               </div>
 
               {/* Genre Pills Filter Row */}
-              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1">
+              <div
+                role="group"
+                aria-label="Trending genre"
+                className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1"
+              >
                 <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1">
                   Genre:
                 </span>
@@ -669,6 +679,7 @@ export default function App() {
                     key={g}
                     type="button"
                     onClick={() => setTrendingGenre(g)}
+                    aria-pressed={trendingGenre === g}
                     className={`px-3 py-1 rounded-full text-xs font-mono border transition-all cursor-pointer whitespace-nowrap ${
                       trendingGenre === g
                         ? 'bg-[var(--accent-indigo)] border-[var(--accent-indigo)] text-white font-bold shadow-xs'
