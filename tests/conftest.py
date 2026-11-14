@@ -18,6 +18,7 @@ A database supplied that way is never truncated by the suite.
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 from functools import lru_cache
 from pathlib import Path
@@ -60,7 +61,8 @@ os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
 REDIS_IS_ISOLATED = (urlparse(os.environ["REDIS_URL"]).path.lstrip("/") or "0") == "15"
 
 from app.config import settings  # noqa: E402  (import after env redirect)
-from app.db import engine  # noqa: E402
+from app.db import AsyncSessionLocal, engine  # noqa: E402
+from app.db_models import Manga  # noqa: E402
 from app.services.cache import redis_client  # noqa: E402
 import app.db_models  # noqa: E402,F401  (registers the tables the migrations create)
 
@@ -226,4 +228,83 @@ async def cleanup_connections():
             await redis_client.flushdb()
         except Exception:
             pass
+    # `redis_client` is a module-level connection pool, so it binds to whichever
+    # event loop first used it -- which is test one's loop. Every later test then
+    # failed with `RuntimeError: Event loop is closed`, and because `get_cached`
+    # swallows Redis errors and returns None, the symptom was a silent cache miss
+    # rather than an error. Closing the pool forces the next test to reconnect
+    # inside its own loop.
+    try:
+        await redis_client.aclose()
+    except Exception:
+        pass
     await engine.dispose()
+
+
+# ---------------------------------------------------------------------------
+# A small, deliberately hostile catalogue.
+#
+# Shared by the tests that assert whole-endpoint behaviour (safety pagination,
+# trending). The NSFW row is the most popular *and* highest-scored title on
+# purpose: a missing safety filter surfaces it at rank 1 rather than nowhere.
+# ---------------------------------------------------------------------------
+
+TARGET_TITLE = "Pagination Probe"
+NEIGHBOURS = 16
+
+
+def embedding_for_seed(seed: int) -> list[float]:
+    """Distinct, strictly ordered similarity to the target row.
+
+    Every neighbour sits at a slightly larger angle from the target, so the ANN
+    ordering is total: without distinct distances the vector search has ties and
+    page boundaries are non-deterministic, which would make those tests flaky
+    rather than meaningful.
+    """
+    theta = 0.05 * seed
+    vector = [0.0] * 384
+    vector[0] = math.cos(theta)
+    vector[1] = math.sin(theta)
+    return vector
+
+
+def catalog_row(title: str, seed: int, **overrides) -> Manga:
+
+
+    values = dict(
+        title_english=title,
+        title_romaji=title,
+        synopsis=f"{title} synopsis for retrieval.",
+        genres=["Action"],
+        tags=[{"name": "Action", "rank": 100}],
+        status="FINISHED",
+        start_year=2021,
+        average_score=80,
+        popularity=100 + seed,
+        cover_image_url=f"https://example.invalid/{seed}.jpg",
+        embedding=embedding_for_seed(seed),
+        is_nsfw=False,
+    )
+    values.update(overrides)
+    return Manga(**values)
+
+
+@pytest.fixture
+async def seeded_catalog():
+    async with AsyncSessionLocal() as session:
+        rows = [catalog_row(TARGET_TITLE, 0)]
+        rows += [catalog_row(f"Probe Neighbour {index}", index) for index in range(1, NEIGHBOURS + 1)]
+        rows.append(
+            catalog_row(
+                "Explicit Probe",
+                99,
+                genres=["Hentai"],
+                tags=[{"name": "Hentai", "rank": 100}],
+                average_score=95,
+                popularity=9999,
+                is_nsfw=True,
+            )
+        )
+        session.add_all(rows)
+        await session.commit()
+    return True

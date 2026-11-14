@@ -9,77 +9,14 @@ Both tests seed their own rows, so they run on any database, including CI's
 empty test database.
 """
 
-import math
-
 import pytest
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from app.db import AsyncSessionLocal
-from app.db_models import Manga
 from app.ingestion.normalize import anilist_to_record, mangadex_to_record
 from app.main import app
-from app.services.cache import set_cached
-
-TARGET_TITLE = "Pagination Probe"
-NEIGHBOURS = 16
-
-
-def _embedding(seed: int) -> list[float]:
-    """Distinct, strictly ordered similarity to the target row.
-
-    Every neighbour sits at a slightly larger angle from the target, so the ANN
-    ordering is total: without distinct distances the vector search has ties and
-    page boundaries are non-deterministic, which would make this test flaky
-    rather than meaningful.
-    """
-    theta = 0.05 * seed
-    vector = [0.0] * 384
-    vector[0] = math.cos(theta)
-    vector[1] = math.sin(theta)
-    return vector
-
-
-def _row(title: str, seed: int, **overrides) -> Manga:
-    values = dict(
-        title_english=title,
-        title_romaji=title,
-        synopsis=f"{title} synopsis for retrieval.",
-        genres=["Action"],
-        tags=[{"name": "Action", "rank": 100}],
-        status="FINISHED",
-        start_year=2021,
-        average_score=80,
-        popularity=100 + seed,
-        cover_image_url=f"https://example.invalid/{seed}.jpg",
-        embedding=_embedding(seed),
-        is_nsfw=False,
-    )
-    values.update(overrides)
-    return Manga(**values)
-
-
-@pytest.fixture
-async def seeded_catalog():
-    async with AsyncSessionLocal() as session:
-        rows = [_row(TARGET_TITLE, 0)]
-        rows += [_row(f"Probe Neighbour {index}", index) for index in range(1, NEIGHBOURS + 1)]
-        # This row must never appear on a public endpoint. It is deliberately the
-        # most popular, highest-scored title so a missing filter would surface it.
-        rows.append(
-            _row(
-                "Explicit Probe",
-                99,
-                genres=["Hentai"],
-                tags=[{"name": "Hentai", "rank": 100}],
-                average_score=95,
-                popularity=9999,
-                is_nsfw=True,
-            )
-        )
-        session.add_all(rows)
-        await session.commit()
-    return True
+from tests.conftest import TARGET_TITLE
 
 
 @pytest.mark.asyncio
@@ -114,10 +51,6 @@ async def test_public_endpoints_never_return_nsfw(seeded_catalog):
             text("SELECT is_nsfw FROM manga WHERE title_english = 'Explicit Probe'")
         )
     assert fixture_is_nsfw is True, "fixture did not create the NSFW row"
-
-    # Force the trending endpoint onto its database path so the test never calls
-    # the live provider.
-    await set_cached("manga:anilist_circuit_open", True, ttl=60)
 
     payloads: list[tuple[str, list]] = []
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:

@@ -1,10 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, text as sa_text
+from sqlalchemy import select, text as sa_text
 from sqlalchemy.orm import defer
 from typing import List, Optional, Any, Dict
-import httpx
-import re
 import random
 import logging
 from datetime import datetime, timezone
@@ -12,9 +10,10 @@ from datetime import datetime, timezone
 from ..db import get_db
 from ..db_models import Manga
 from ..models import MangaDetail, RecommendationResult, RecommendFilters
+from ..services import trending
 from ..services.retrieval import retrieve_similar_manga, similar_edges_are_fresh
 from ..services.cache import get_cached, set_cached
-from ..services.safety import resolve_is_nsfw, row_is_nsfw, safety_filter
+from ..services.safety import row_is_nsfw, safety_filter
 
 logger = logging.getLogger("mitsu.manga")
 
@@ -152,251 +151,24 @@ async def get_trending_manga(
     top10_only: bool = False,
     db: AsyncSession = Depends(get_db)
 ):
-    response.headers["Cache-Control"] = "public, max-age=1800, stale-while-revalidate=120"
-    fmt = (format_type or "all").lower()
-    genre_clean = genre.strip() if genre and genre.strip() and genre.strip().lower() != "all" else None
-    
-    if top10_only:
-        limit = 10
-        page = 1
+    """Trending, ranked over the catalogue itself (ARCH-08).
 
-    cache_key = f"manga:trending:{fmt}:{genre_clean or 'all'}:{page}:{limit}"
-    cached_data = await get_cached(cache_key)
-    if cached_data:
-        return cached_data
+    This used to call AniList live on the request path with no provider budget.
+    That is gone rather than budgeted: a provider row has no local primary key,
+    so it has to be dropped, which made any provider "top-up" unable to add a
+    row the catalogue did not already hold. See `services/trending.py`.
+    """
+    response.headers["Cache-Control"] = "public, max-age=900, stale-while-revalidate=120"
+    rows = await trending.get_trending(
+        db,
+        page=page,
+        limit=limit,
+        fmt=format_type,
+        genre=genre,
+        top10_only=top10_only,
+    )
+    return [RecommendationResult(**row) for row in rows]
 
-    # Map format_type to AniList countryOfOrigin code
-    country_map = {
-        "manga": "JP",
-        "manhwa": "KR",
-        "manhua": "CN"
-    }
-    country_code = country_map.get(fmt)
-
-    trending_results: List[RecommendationResult] = []
-
-    # Check if AniList circuit breaker is currently open (cooldown active from recent failure)
-    anilist_circuit_open_raw = await get_cached("manga:anilist_circuit_open")
-    anilist_circuit_open = False
-    if anilist_circuit_open_raw is True or anilist_circuit_open_raw == "1" or anilist_circuit_open_raw == 1:
-        anilist_circuit_open = True
-    from_db_fallback = False
-
-    if not anilist_circuit_open:
-        # Attempt to fetch live trending from AniList GraphQL API with snappy 2.5s timeout
-        try:
-            query = """
-            query ($page: Int, $perPage: Int, $countryOfOrigin: String, $genre: String) {
-              Page(page: $page, perPage: $perPage) {
-                media(type: MANGA, sort: TRENDING_DESC, countryOfOrigin: $countryOfOrigin, genre: $genre) {
-                  id
-                  idMal
-                  title { romaji english native }
-                  description(asHtml: false)
-                  genres
-                  tags { name rank }
-                  status
-                  startDate { year }
-                  chapters
-                  volumes
-                  averageScore
-                  popularity
-                  coverImage { extraLarge large }
-                  bannerImage
-                  siteUrl
-                  isAdult
-                }
-              }
-            }
-            """
-            variables: Dict[str, Any] = {"page": page, "perPage": limit}
-            if country_code:
-                variables["countryOfOrigin"] = country_code
-            if genre_clean:
-                low_g = genre_clean.lower()
-                if low_g in ['yaoi', 'bl', "boys' love"]:
-                    variables["genre"] = "Boys' Love"
-                elif low_g in ['yuri', 'gl', "girls' love"]:
-                    variables["genre"] = "Girls' Love"
-                else:
-                    variables["genre"] = genre_clean
-
-            timeout = httpx.Timeout(2.5, connect=1.5, read=2.0, write=1.0, pool=1.0)
-            headers = {
-                "Accept": "application/json",
-                "Content-Type": "application/json",
-                "User-Agent": "mitsu/1.0",
-            }
-            async with httpx.AsyncClient(timeout=timeout, headers=headers) as client:
-                resp = await client.post("https://graphql.anilist.co", json={"query": query, "variables": variables})
-                if resp.status_code == 200:
-                    data = resp.json()
-                    media_list = data.get("data", {}).get("Page", {}).get("media", []) or []
-                    if not media_list:
-                        logger.debug("AniList trending returned empty media list for filters (page=%s, limit=%s, country=%s, genre=%s)", page, limit, country_code, genre_clean)
-                    else:
-                        # `id` is the local PK everywhere else in the API, so map
-                        # each AniList id to the catalog row when we have one and
-                        # expose the provider id only as `anilist_id`.
-                        anilist_ids = [m.get("id") for m in media_list if m.get("id")]
-                        local_ids: Dict[int, int] = {}
-                        if anilist_ids:
-                            rows = await db.execute(
-                                select(Manga.anilist_id, Manga.id).where(
-                                    Manga.anilist_id.in_(anilist_ids)
-                                )
-                            )
-                            local_ids = {al: pk for al, pk in rows.all() if al is not None}
-                        for item in media_list:
-                            # The live AniList path is public: never surface an
-                            # adult title. The decision comes from the same
-                            # helper as the stored filter (safety.py), not a
-                            # provider flag check invented here.
-                            item_nsfw = resolve_is_nsfw(
-                                is_adult=item.get("isAdult"),
-                                genres=item.get("genres"),
-                                tags=item.get("tags"),
-                            )
-                            if item_nsfw:
-                                continue
-                            t = item.get("title", {})
-                            title_str = t.get("english") or t.get("romaji") or t.get("native") or "Unknown Title"
-                            cover = item.get("coverImage", {})
-                            cover_url = cover.get("extraLarge") or cover.get("large")
-                            synopsis_clean = item.get("description")
-                            if synopsis_clean:
-                                synopsis_clean = re.sub(r'<[^>]+>', '', synopsis_clean)
-
-                            trending_results.append(RecommendationResult(
-                                id=local_ids.get(item.get("id")),
-                                anilist_id=item.get("id"),
-                                mal_id=item.get("idMal"),
-                                title=title_str,
-                                cover_image_url=cover_url,
-                                banner_image=item.get("bannerImage"),
-                                synopsis=synopsis_clean,
-                                genres=item.get("genres") or [],
-                                tags=item.get("tags") or [],
-                                status=item.get("status"),
-                                start_year=item.get("startDate", {}).get("year") if item.get("startDate") else None,
-                                chapters=item.get("chapters"),
-                                volumes=item.get("volumes"),
-                                average_score=item.get("averageScore"),
-                                similarity_score=None,
-                                llm_reasoning=None,
-                                is_nsfw=item_nsfw,
-                            ))
-                        logger.info("AniList trending fetched %d results (live)", len(trending_results))
-                elif resp.status_code == 429:
-                    retry_after = resp.headers.get("Retry-After")
-                    ttl = 60
-                    if retry_after:
-                        try:
-                            parsed = int(retry_after.strip())
-                            if parsed > 0:
-                                ttl = max(60, parsed)
-                        except Exception:
-                            pass
-                    logger.warning("AniList API returned 429 (rate limited). Tripping circuit breaker for %ss.", ttl)
-                    await set_cached("manga:anilist_circuit_open", True, ttl=ttl)
-                elif resp.status_code in (500, 502, 503, 504):
-                    logger.warning("AniList API returned %d. Tripping circuit breaker for 60s.", resp.status_code)
-                    await set_cached("manga:anilist_circuit_open", True, ttl=60)
-                elif resp.status_code in (400, 401, 403, 404):
-                    logger.debug("AniList API returned %d (client error). Falling back to DB without tripping circuit breaker.", resp.status_code)
-                else:
-                    logger.debug("AniList API returned unexpected status %d. Falling back to DB.", resp.status_code)
-        except Exception as e:
-            logger.warning("AniList trending fetch failed (%s). Tripping circuit breaker for 60s and using fast DB fallback.", e, exc_info=True)
-            await set_cached("manga:anilist_circuit_open", True, ttl=60)
-
-    # If AniList request failed or returned empty results, query local database
-    if not trending_results:
-        from_db_fallback = True
-        where_clauses: List[Any] = [
-            Manga.cover_image_url.isnot(None),
-            sa_text(safety_filter()),
-        ]
-        # Bind parameters for the caller-supplied parts of this query; nothing
-        # from the request is ever concatenated into the SQL text.
-        query_params: Dict[str, Any] = {}
-
-        # Prefer partition pruning: constrain start_year when possible; also include releasing titles
-        year_clause = (Manga.start_year >= 2020) | ((Manga.status == "RELEASING") & Manga.start_year.isnot(None))
-        where_clauses.append(year_clause)
-
-        if fmt and fmt != "all":
-            from ..services.retrieval import build_format_sql_condition
-            fmt_cond = build_format_sql_condition([fmt])
-            if fmt_cond:
-                where_clauses.append(sa_text(fmt_cond))
-
-        if genre_clean:
-            low = genre_clean.lower()
-            if low in ['yaoi', 'bl', "boys' love"]:
-                where_clauses.append(sa_text("(genres @> ARRAY['Boys'' Love'] OR tags::text ILIKE '%Boys'' Love%' OR tags::text ILIKE '%Yaoi%')"))
-            elif low in ['yuri', 'gl', "girls' love"]:
-                where_clauses.append(sa_text("(genres @> ARRAY['Girls'' Love'] OR tags::text ILIKE '%Girls'' Love%' OR tags::text ILIKE '%Yuri%')"))
-            elif low in ['shoujo ai']:
-                where_clauses.append(sa_text("(tags::text ILIKE '%Shoujo Ai%' OR tags::text ILIKE '%Girls'' Love%' OR tags::text ILIKE '%Yuri%')"))
-            elif low in ['shounen ai']:
-                where_clauses.append(sa_text("(tags::text ILIKE '%Shounen Ai%' OR tags::text ILIKE '%Boys'' Love%' OR tags::text ILIKE '%Yaoi%')"))
-            else:
-                # The genre is caller-supplied. Bind it instead of interpolating
-                # it into the SQL text: doubling single quotes was the only thing
-                # standing between this endpoint and the request in `genre`.
-                where_clauses.append(sa_text(
-                    "(:trending_genre = ANY(genres)"
-                    " OR tags::text ILIKE '%' || :trending_genre || '%')"
-                ))
-                query_params["trending_genre"] = genre_clean
-
-        offset = max(0, (page - 1) * limit)
-        stmt = (
-            select(Manga)
-            .options(defer(Manga.embedding))
-            .where(*where_clauses)
-            .order_by(
-                (func.coalesce(Manga.popularity, 0) * func.coalesce(Manga.average_score, 0)).desc(),
-                Manga.average_score.desc().nullslast(),
-                Manga.popularity.desc().nullslast()
-            )
-            .offset(offset)
-            .limit(limit)
-        )
-        result = await db.execute(stmt, query_params) if query_params else await db.execute(stmt)
-        mangas: List[Any] = list(result.scalars().all())
-
-        trending_results = [
-            RecommendationResult(
-                id=m.id,
-                anilist_id=m.anilist_id,
-                mal_id=m.mal_id,
-                title=m.title_english or m.title_romaji or m.title_native or "Unknown Title",
-                cover_image_url=m.cover_image_url,
-                banner_image=m.banner_image,
-                synopsis=m.synopsis,
-                genres=m.genres,
-                tags=m.tags,
-                status=m.status,
-                start_year=m.start_year,
-                chapters=m.chapters,
-                volumes=m.volumes,
-                average_score=m.average_score,
-                similarity_score=None,
-                llm_reasoning=None,
-                is_nsfw=m.is_nsfw,
-            ) for m in mangas
-        ]
-        if trending_results:
-            logger.info("AniList trending using DB fallback (%d results)", len(trending_results))
-        else:
-            logger.debug("AniList trending DB fallback returned empty results")
-
-    # Live AniList cached for 4 hours; fast DB fallback cached for 15 mins to retry AniList soon
-    cache_ttl = 900 if from_db_fallback else 14400
-    await set_cached(cache_key, [r.model_dump() for r in trending_results], ttl=cache_ttl)
-    return trending_results
 
 @router.get("/manga/{manga_id}", response_model=MangaDetail)
 async def get_manga(manga_id: int, response: Response, db: AsyncSession = Depends(get_db)):
