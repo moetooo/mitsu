@@ -1,5 +1,29 @@
 from typing import Dict, Any
+from datetime import datetime, timezone
 import re
+
+from ..services.safety import resolve_is_nsfw
+
+def _from_epoch(value) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromtimestamp(int(value), tz=timezone.utc)
+    except (TypeError, ValueError, OSError):
+        return None
+
+
+def _from_iso(value) -> datetime | None:
+    if not value or not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
 
 def strip_html_tags(text: str) -> str:
     if not text:
@@ -34,7 +58,14 @@ def anilist_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
         "popularity": raw.get("popularity"),
         "cover_image_url": raw.get("coverImage", {}).get("large"),
         "banner_image": raw.get("bannerImage"),
-        "site_url": raw.get("siteUrl")
+        "site_url": raw.get("siteUrl"),
+        "source_updated_at": _from_epoch(raw.get("updatedAt")),
+        "sync_source": "anilist",
+        "is_nsfw": resolve_is_nsfw(
+            is_adult=raw.get("isAdult"),
+            genres=raw.get("genres"),
+            tags=raw.get("tags"),
+        ),
     }
 
 def mangadex_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
@@ -89,5 +120,15 @@ def mangadex_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
         "average_score": None,
         "popularity": None,
         "cover_image_url": cover_url,
-        "site_url": f"https://mangadex.org/title/{md_id}"
+        "site_url": f"https://mangadex.org/title/{md_id}",
+        "source_updated_at": _from_iso(attr.get("updatedAt")),
+        "sync_source": "mangadex",
+        # MangaDex is the only source that publishes an explicit contentRating
+        # (safe | suggestive | erotica | pornographic). Ignoring it meant every
+        # adult MangaDex title reached the catalog with no NSFW signal at all.
+        "is_nsfw": resolve_is_nsfw(
+            content_rating=attr.get("contentRating"),
+            genres=genres,
+            tags=tags,
+        ),
     }

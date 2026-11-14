@@ -1,109 +1,196 @@
-from sqlalchemy import select, or_, func, update
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from typing import Any
+
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from ..db_models import Manga
 from ..enrichment.models import merge_inferred_tags
+from ..sync.identity import (
+    ExternalId,
+    attach_external_ids,
+    extract_external_ids,
+    find_match,
+)
 
-async def smart_upsert_manga(session: AsyncSession, record: dict) -> Manga:
+_EMBEDDING_FIELDS = (
+    "title_romaji",
+    "title_english",
+    "title_native",
+    "synopsis",
+    "genres",
+    "tags",
+)
+
+
+@dataclass
+class UpsertResult:
+    manga: Manga
+    action: str  # inserted | updated | unchanged
+    content_changed: bool = False
+    conflicts: list[dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def inserted(self) -> bool:
+        return self.action == "inserted"
+
+
+def _embedding_fields_snapshot(manga: Manga) -> dict[str, str]:
+    """Frozen view of the fields the embedding is built from."""
+    return {
+        key: json.dumps(getattr(manga, key, None), sort_keys=True, default=str)
+        for key in _EMBEDDING_FIELDS
+    }
+
+
+async def smart_upsert_manga_ex(
+    session: AsyncSession,
+    record: dict[str, Any],
+    *,
+    allow_title_fallback: bool = True,
+) -> UpsertResult:
+    """ID-first upsert that cannot create a second row for a known external ID.
+
+    The old code matched by IDs in an OR and then inserted on any miss. That
+    allowed an AniList record and a MangaDex-only row to coexist even when a
+    link proved they were the same series. This version resolves identity
+    through `manga_external_ids`, attaches new IDs to the canonical row, and
+    reports cross-row conflicts instead of inserting.
     """
-    Intelligent upsert that prevents duplicate records across sources.
-    Matches by:
-    1. Direct IDs (anilist_id, mal_id, mangadex_id)
-    2. Exact title (romaji or english, case-insensitive) + start_year
-    Updates existing record if matched, otherwise creates a new row.
-    """
-    anilist_id = record.get("anilist_id")
-    mal_id = record.get("mal_id")
-    mangadex_id = record.get("mangadex_id")
-    title_romaji = record.get("title_romaji")
-    title_english = record.get("title_english")
-    start_year = record.get("start_year")
+    record = dict(record)
+    record.pop("external_ids", None)
+    ids: list[ExternalId] = extract_external_ids(record)
+    match = await find_match(session, record, allow_title_fallback=allow_title_fallback)
+    conflicts = list(match.conflicts)
 
-    # 1. Match by external IDs
-    id_conditions = []
-    if anilist_id is not None:
-        id_conditions.append(Manga.anilist_id == anilist_id)
-    if mal_id is not None:
-        id_conditions.append(Manga.mal_id == mal_id)
-    if mangadex_id is not None:
-        id_conditions.append(Manga.mangadex_id == mangadex_id)
+    if match.manga is not None:
+        existing = match.manga
 
-    existing_manga = None
-    if id_conditions:
-        stmt = select(Manga).where(or_(*id_conditions))
-        res = await session.execute(stmt)
-        existing_manga = res.scalars().first()
+        # Do not write an ID that is already owned by another manga. That case
+        # is a real duplicate pair for the explicit merge command.
+        id_conflicts = await attach_external_ids(session, existing.id, ids)
+        conflicts.extend(id_conflicts)
+        blocked = {(c["source"], c["external_id"]) for c in id_conflicts}
+        for item in ids:
+            if (item.source, item.external_id) in blocked:
+                column = {
+                    "anilist": "anilist_id",
+                    "mal": "mal_id",
+                    "mangadex": "mangadex_id",
+                }.get(item.source)
+                if column:
+                    record.pop(column, None)
 
-    # 2. Match by title + start_year if no ID match found
-    if not existing_manga and start_year and (title_romaji or title_english):
-        titles_to_check = [t.lower().strip() for t in [title_romaji, title_english] if t]
-        
-        stmt = select(Manga).where(
-            Manga.start_year == start_year,
-            or_(
-                func.lower(Manga.title_romaji).in_(titles_to_check),
-                func.lower(Manga.title_english).in_(titles_to_check)
-            )
+        # Compare before/after the merge instead of comparing the raw incoming
+        # record to the stored row. A multi-source row holds the union of every
+        # source's tags/genres, so the raw-record comparison was false on every
+        # sync and re-embedded rows that had not actually changed.
+        before = _embedding_fields_snapshot(existing)
+        _merge_into(existing, record)
+        changed = _embedding_fields_snapshot(existing) != before
+        return UpsertResult(
+            manga=existing,
+            action="updated" if changed else "unchanged",
+            content_changed=changed,
+            conflicts=conflicts,
         )
-        res = await session.execute(stmt)
-        existing_manga = res.scalars().first()
 
-    # 3. Update existing or Insert new
-    if existing_manga:
-        # Merge alternative titles as deduplicated union
-        incoming_alts = record.get("alternative_titles") or []
-        existing_alts = existing_manga.alternative_titles or []
-        seen_alts_lower = {a.lower().strip() for a in existing_alts if a}
-        merged_alts = list(existing_alts)
-        for a in incoming_alts:
-            if a and a.strip() and a.lower().strip() not in seen_alts_lower:
-                merged_alts.append(a.strip())
-                seen_alts_lower.add(a.lower().strip())
-        existing_manga.alternative_titles = merged_alts
+    new_manga = Manga(**record)
+    session.add(new_manga)
+    await session.flush()
+    conflicts.extend(await attach_external_ids(session, new_manga.id, ids))
+    return UpsertResult(
+        manga=new_manga,
+        action="inserted",
+        content_changed=True,
+        conflicts=conflicts,
+    )
 
-        # Merge inferred tags if provided
-        if "inferred_tags" in record and record["inferred_tags"]:
-            existing_manga.inferred_tags = merge_inferred_tags(
-                existing_manga.inferred_tags or [],
-                record.get("inferred_tags") or []
-            )
 
-        # Merge genres as deduplicated union
-        if "genres" in record and record["genres"]:
-            existing_genres = existing_manga.genres or []
-            seen_g = set(existing_genres)
-            merged_g = list(existing_genres)
-            for g in record["genres"]:
-                if g and g not in seen_g:
-                    merged_g.append(g)
-                    seen_g.add(g)
-            existing_manga.genres = merged_g
+async def smart_upsert_manga(session: AsyncSession, record: dict[str, Any]) -> Manga:
+    """Backward-compatible wrapper used by the existing ingestion paths."""
+    result = await smart_upsert_manga_ex(session, record)
+    return result.manga
 
-        # Merge raw tags as deduplicated union
-        if "tags" in record and record["tags"]:
-            existing_tags = existing_manga.tags or []
-            existing_names = {t.get("name") for t in existing_tags if isinstance(t, dict)}
-            merged_tags = list(existing_tags)
-            for t in record["tags"]:
-                if isinstance(t, dict) and t.get("name") and t.get("name") not in existing_names:
-                    merged_tags.append(t)
-                    existing_names.add(t.get("name"))
-            existing_manga.tags = merged_tags
 
-        # Update remaining non-empty fields without overwriting existing data with None
-        special_handled = {"alternative_titles", "inferred_tags", "genres", "tags"}
-        for key, value in record.items():
-            if key in special_handled:
+def _merge_into(existing: Manga, record: dict[str, Any]) -> None:
+    incoming_alts = record.get("alternative_titles") or []
+    existing_alts = existing.alternative_titles or []
+    seen_alts_lower = {a.lower().strip() for a in existing_alts if a}
+    merged_alts = list(existing_alts)
+    for alias in incoming_alts:
+        if alias and alias.strip() and alias.lower().strip() not in seen_alts_lower:
+            merged_alts.append(alias.strip())
+            seen_alts_lower.add(alias.lower().strip())
+    if incoming_alts:
+        existing.alternative_titles = merged_alts
+
+    if record.get("inferred_tags"):
+        existing.inferred_tags = merge_inferred_tags(
+            existing.inferred_tags or [],
+            record.get("inferred_tags") or [],
+        )
+
+    if record.get("genres"):
+        existing_genres = existing.genres or []
+        seen_genres = set(existing_genres)
+        merged_genres = list(existing_genres)
+        for genre in record["genres"]:
+            if genre and genre not in seen_genres:
+                merged_genres.append(genre)
+                seen_genres.add(genre)
+        existing.genres = merged_genres
+
+    if record.get("tags"):
+        existing_tags = existing.tags or []
+        existing_names = {t.get("name") for t in existing_tags if isinstance(t, dict)}
+        merged_tags = list(existing_tags)
+        for tag in record["tags"]:
+            if isinstance(tag, dict) and tag.get("name") and tag.get("name") not in existing_names:
+                merged_tags.append(tag)
+                existing_names.add(tag.get("name"))
+        existing.tags = merged_tags
+
+    if record.get("is_nsfw"):
+        # Safety is monotonic during a merge: one source saying "adult" is
+        # enough, and a later "safe" rating must not clear it.
+        existing.is_nsfw = True
+
+    special_handled = {"alternative_titles", "inferred_tags", "genres", "tags", "is_nsfw"}
+    for key, value in record.items():
+        if key in special_handled:
+            continue
+        if key == "source_updated_at":
+            current = existing.source_updated_at
+            if value is None:
                 continue
-            # Preserve existing titles; do not clobber with None or empty
-            if key in {"title_romaji", "title_english", "title_native"}:
-                if not getattr(existing_manga, key, None) and value:
-                    setattr(existing_manga, key, value)
-            elif value is not None or getattr(existing_manga, key, None) is None:
-                setattr(existing_manga, key, value)
+            if current is not None and _as_utc(current) >= _as_utc(value):
+                continue
+            existing.source_updated_at = value
+            continue
+        if key == "last_synced_at":
+            if value is not None:
+                existing.last_synced_at = value
+            continue
+        if key in {"title_romaji", "title_english", "title_native"}:
+            if not getattr(existing, key, None) and value:
+                setattr(existing, key, value)
+        elif key in {"synopsis", "cover_image_url", "banner_image", "site_url"} and not value:
+            continue
+        elif key in {"anilist_id", "mal_id", "mangadex_id"}:
+            current = getattr(existing, key, None)
+            if current is not None and value is not None and str(current) != str(value):
+                continue
+            if value is not None or current is None:
+                setattr(existing, key, value)
+        elif value is not None or getattr(existing, key, None) is None:
+            setattr(existing, key, value)
 
-        return existing_manga
-    else:
-        new_manga = Manga(**record)
-        session.add(new_manga)
-        return new_manga
 
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
