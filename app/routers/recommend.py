@@ -1,6 +1,6 @@
 import time
 from typing import List
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +39,16 @@ async def roulette(request: RouletteRequest, db: AsyncSession = Depends(get_db))
             session_id=request.session_id,
         )
     
-    item = results[0] if results else {}
+    if not results:
+        # Nothing in the catalog matches these filters. Returning the old
+        # placeholder card (id=0, "Unknown Title") put a fake row in the feed and
+        # made an empty result indistinguishable from a real recommendation.
+        raise HTTPException(
+            status_code=404,
+            detail="no manga matches the current filters",
+        )
+
+    item = results[0]
     return RecommendationResult(
         id=item.get("id", 0),
         anilist_id=item.get("anilist_id"),
