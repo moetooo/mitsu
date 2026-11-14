@@ -673,6 +673,44 @@ async def sync_status(limit: int = 5, offset: int = 0) -> dict[str, Any]:
     }
 
 
+async def ingestion_status(session) -> dict[str, Any]:
+    """Dashboard counts: queue progress by source, and catalogue totals.
+
+    The admission queue is `discovery_queue`, written by `app.ingestion`; this
+    read lives next to `sync_status` because the dashboard fetches both from the
+    admin router and neither is a catalogue lookup. It used to be raw SQL inside
+    the router itself (ARCH-07).
+
+    The session is passed in rather than created here: the caller already holds
+    one, and a second connection per dashboard refresh was pure overhead.
+    """
+    queue = await session.execute(
+        text(
+            """
+            SELECT source,
+                   count(*) FILTER (WHERE enriched) AS done,
+                   count(*) FILTER (WHERE NOT enriched AND enrich_attempts < 5) AS pending,
+                   count(*) FILTER (WHERE NOT enriched AND enrich_attempts >= 5) AS stuck,
+                   count(*) AS total
+            FROM discovery_queue
+            GROUP BY source;
+            """
+        )
+    )
+    rows = queue.mappings().all()
+
+    total_manga = await session.scalar(text("SELECT count(*) FROM manga;"))
+    total_anilist = await session.scalar(
+        text("SELECT count(*) FROM manga WHERE anilist_id IS NOT NULL;")
+    )
+
+    return {
+        "total_manga_in_db": total_manga,
+        "anilist_manga_count": total_anilist,
+        "discovery_queue_status": [dict(row) for row in rows],
+    }
+
+
 async def _run_anilist_backfill(
     summary: dict[str, Any],
     *,

@@ -6,7 +6,7 @@ pytestmark = pytest.mark.requires_catalog
 
 from app.db import AsyncSessionLocal
 from app.models import RecommendFilters
-from app.services.retrieval import retrieve_roulette_manga
+from app.services.roulette import retrieve_roulette_manga
 
 HANGUL_RE = re.compile(r'[\uac00-\ud7af\u1100-\u11ff\u3130-\u318f]')
 

@@ -20,12 +20,9 @@ import pytest
 
 from app.config import settings
 from app.db import AsyncSessionLocal
-from app.services.retrieval import (
-    apply_diversity_filtering,
-    franchise_key,
-    is_confident_title_match,
-    sample_candidates_from_db,
-)
+from app.services.diversity import apply_diversity_filtering, franchise_key
+from app.services.roulette import sample_candidates_from_db
+from app.services.title_match import is_confident_title_match
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +276,7 @@ async def test_thematic_phrases_no_longer_take_the_exact_title_path():
     suggestion. If any of these starts returning an exact match again, the
     hijack is back.
     """
-    from app.services.retrieval import find_exact_title
+    from app.services.title_match import find_exact_title
 
     async with AsyncSessionLocal() as db:
         hijacked = []
@@ -297,7 +294,7 @@ async def test_misspellings_still_produce_a_suggestion():
     Raising the similarity threshold to kill the five hijacks was measured to
     cost 3 of these 8; offering a suggestion instead costs none of them.
     """
-    from app.services.retrieval import find_title_suggestion
+    from app.services.title_match import find_title_suggestion
 
     async with AsyncSessionLocal() as db:
         found = []
@@ -312,7 +309,7 @@ async def test_misspellings_still_produce_a_suggestion():
 @pytest.mark.asyncio
 async def test_exact_titles_still_resolve_without_a_search():
     """The exact fast path survives, so typing a real title costs one lookup."""
-    from app.services.retrieval import find_exact_title
+    from app.services.title_match import find_exact_title
 
     async with AsyncSessionLocal() as db:
         for query in ("berserk", "one piece", "naruto"):

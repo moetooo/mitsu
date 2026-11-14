@@ -24,9 +24,9 @@ from sqlalchemy import text
 from app.config import settings
 from app.db import AsyncSessionLocal
 from app.models import RecommendFilters
+from app.services.diversity import apply_diversity_filtering
 from app.services.retrieval import (
     apply_ann_settings,
-    apply_diversity_filtering,
     compute_pool_limit,
     retrieve_similar_manga,
     similar_edges_are_fresh,

@@ -24,7 +24,7 @@ There is deliberately no scheduler: the query measures **63 ms warm** against th
 filter combination costs one indexed query. A scheduled precompute would have
 existed only to keep the external call off the request path.
 
-The genre and format predicates come from `retrieval.build_genre_sql_condition`
+The genre and format predicates come from `query_filters.build_genre_sql_condition`
 and `format.build_format_sql_condition` rather than being re-written here. The
 router used to carry its own inline `tags::text ILIKE '%Yaoi%'` variants, which
 disagreed with the retrieval filter on the same request (ARCH-07).
@@ -42,7 +42,7 @@ from sqlalchemy.orm import defer
 from ..db_models import Manga
 from .cache import get_cached, set_cached
 from .format import build_format_sql_condition
-from .retrieval import build_genre_sql_condition
+from .query_filters import build_genre_sql_condition
 from .safety import safety_filter
 
 logger = logging.getLogger("mitsu.services.trending")

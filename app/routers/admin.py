@@ -7,7 +7,6 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, 
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import text
 
 from ..auth import (
     SESSION_COOKIE,
@@ -26,7 +25,7 @@ from ..sync.guardrails import (
     effective_daily_limit,
     preflight_trigger,
 )
-from ..sync.service import run_backfill, run_sync, sync_status
+from ..sync.service import ingestion_status, run_backfill, run_sync, sync_status
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -150,30 +149,12 @@ async def admin_logout(response: Response):
 
 @router.get("/ingestion-status", dependencies=[Depends(require_sync_admin)])
 async def get_ingestion_status(db: AsyncSession = Depends(get_db)):
-    query = text("""
-        SELECT source,
-               count(*) FILTER (WHERE enriched) AS done,
-               count(*) FILTER (WHERE NOT enriched AND enrich_attempts < 5) AS pending,
-               count(*) FILTER (WHERE NOT enriched AND enrich_attempts >= 5) AS stuck,
-               count(*) AS total
-        FROM discovery_queue
-        GROUP BY source;
-    """)
+    """Queue progress and catalogue totals for the dashboard.
 
-    result = await db.execute(query)
-    rows = result.mappings().all()
-
-    manga_count_res = await db.execute(text("SELECT count(*) FROM manga;"))
-    total_manga = manga_count_res.scalar()
-
-    anilist_count_res = await db.execute(text("SELECT count(*) FROM manga WHERE anilist_id IS NOT NULL;"))
-    total_anilist = anilist_count_res.scalar()
-
-    return {
-        "total_manga_in_db": total_manga,
-        "anilist_manga_count": total_anilist,
-        "discovery_queue_status": [dict(r) for r in rows]
-    }
+    The aggregate queries live in `sync.service.ingestion_status` next to
+    `sync_status` (ARCH-07), so the router holds no SQL.
+    """
+    return await ingestion_status(db)
 
 
 @router.post("/sync", dependencies=[Depends(require_sync_admin)])

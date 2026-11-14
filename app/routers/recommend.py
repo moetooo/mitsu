@@ -1,8 +1,6 @@
 import time
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
-from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
 from ..models import (
     RecommendRequest,
@@ -11,15 +9,12 @@ from ..models import (
     RouletteRequest,
     TitleSuggestion,
 )
-from ..db_models import Manga
+from ..services import catalog
 from ..db import get_db
 from ..services.embedding import generate_embedding
-from ..services.retrieval import (
-    retrieve_similar_manga,
-    retrieve_roulette_manga,
-    find_exact_title,
-    find_title_suggestion,
-)
+from ..services.retrieval import retrieve_similar_manga
+from ..services.roulette import retrieve_roulette_manga
+from ..services.title_match import find_exact_title, find_title_suggestion
 from ..services.llm import generate_reasoning
 from ..services.cache import get_cached, set_cached, generate_cache_key
 from ..services.search_autocorrect import autocorrect_query
@@ -150,19 +145,14 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         close = await find_title_suggestion(db, request.query)
         if close:
             sug_id, sug_name, _sug_emb, sug_score = close
-            sug_row = await db.execute(
-                select(Manga.id, Manga.title_english, Manga.title_romaji,
-                       Manga.cover_image_url, Manga.format_type, Manga.start_year)
-                .where(Manga.id == sug_id)
-            )
-            sug = sug_row.first()
+            sug = await catalog.get_title_card(db, sug_id)
             if sug:
                 title_suggestion = TitleSuggestion(
-                    id=sug.id,
-                    title=sug.title_english or sug.title_romaji or sug_name,
-                    cover_image_url=sug.cover_image_url,
-                    format_type=sug.format_type,
-                    start_year=sug.start_year,
+                    id=sug["id"],
+                    title=sug["title"] or sug_name,
+                    cover_image_url=sug["cover_image_url"],
+                    format_type=sug["format_type"],
+                    start_year=sug["start_year"],
                     match_score=round(float(sug_score), 4),
                 )
     
@@ -177,8 +167,7 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         target_manga = None
         top_candidates = []
         if request.page == 1:
-            res = await db.execute(select(Manga).options(defer(Manga.embedding)).where(Manga.id == mid))
-            target_manga = res.scalar_one_or_none()
+            target_manga = await catalog.get_manga(db, mid)
             if target_manga:
                 top_candidates.append({
                     "manga": target_manga,

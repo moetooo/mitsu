@@ -1,11 +1,7 @@
 import json
 import unittest
-from app.services.retrieval import (
-    build_format_sql_condition,
-    infer_format_type,
-    build_genre_sql_condition,
-    generate_filter_hash
-)
+from app.services.format import build_format_sql_condition, infer_format_type
+from app.services.query_filters import build_genre_sql_condition, generate_filter_hash
 from app.models import RecommendFilters
 
 class TestFilterBuilder(unittest.TestCase):
