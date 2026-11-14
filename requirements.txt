@@ -1,12 +1,34 @@
-fastapi
-uvicorn
-asyncpg
-SQLAlchemy
-pydantic
-pydantic-settings
-fastembed
-groq
-redis
-httpx
-pgvector
-brotli-asgi
+# Runtime. Pinned so a clean checkout (and CI) installs the same versions the
+# suite was verified against; the previous unpinned file could not reproduce a
+# working environment and was missing the test/ML dependencies entirely.
+
+# API
+fastapi==0.141.1
+uvicorn==0.38.0
+brotli-asgi==1.6.0
+
+# Database
+asyncpg==0.31.0
+SQLAlchemy==2.0.45
+pgvector==0.5.0
+
+# Settings / models
+pydantic==2.12.3
+pydantic-settings==2.10.1
+python-dotenv==1.1.0
+
+# Embeddings + LLM (fastembed pulls its own inference runtime; pin the ML stack
+# explicitly so a resolver cannot drift to an incompatible backend)
+fastembed==0.8.0
+onnxruntime==1.23.2
+tokenizers==0.22.1
+numpy==2.3.5
+groq==1.0.0
+
+# Cache / HTTP
+redis==8.1.0
+httpx==0.28.1
+
+# Tests
+pytest==9.1.1
+pytest-asyncio==1.4.0
