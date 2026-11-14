@@ -21,7 +21,6 @@ from httpx import ASGITransport, AsyncClient
 from app.db import AsyncSessionLocal
 from app.db_models import Manga
 from app.main import app
-from app.services.cache import set_cached
 
 
 def _embedding(seed: int) -> list[float]:
@@ -129,18 +128,16 @@ async def test_similar_still_404s_without_edges_or_embedding(client):
 
 
 # --------------------------------------------------------------------------
-# API-09 - the trending DB fallback binds the genre
+# API-09 - the trending genre filter binds instead of interpolating
 # --------------------------------------------------------------------------
 
 
-async def test_trending_fallback_binds_genre_instead_of_interpolating(client):
+async def test_trending_binds_genre_instead_of_interpolating(client):
     async with AsyncSessionLocal() as session:
         session.add(_row("Trending Genre Probe", 4, genres=["Action"]))
         await session.commit()
 
-    # Force the DB fallback path so the test never touches AniList.
-    await set_cached("manga:anilist_circuit_open", True, ttl=60)
-
+    # Trending is catalog-backed now, so there is no provider path to force.
     ok = await client.get("/manga/trending", params={"genre": "Action"})
     assert ok.status_code == 200, ok.text
     assert [item["title"] for item in ok.json()] == ["Trending Genre Probe"]
