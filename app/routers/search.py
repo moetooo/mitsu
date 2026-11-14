@@ -23,8 +23,9 @@ async def search_manga(
     """Title jump box.
 
     The statement, the LIKE escaping and the safety predicate live in
-    `catalog.search_titles` (ARCH-07, API-08). The handler keeps the cache and the
-    autocorrect hop; Stage 7B replaces the latter.
+    `catalog.search_titles` (ARCH-07, API-08). This handler owns the cache key and
+    the spelling fallback: **search first, correct only when nothing matched**
+    (SVC-05), so a query that works is answered exactly as typed.
     """
     clean_q = sanitize_search_query(q)
     if not clean_q:
@@ -40,25 +41,27 @@ async def search_manga(
     if cached_data is not None:
         return cached_data
 
-    # 2. Autocorrect query if needed
-    autocorrected_q = await autocorrect_query(clean_q, db)
-    if autocorrected_q != clean_q:
-        auto_cache_key = f"search:{autocorrected_q}:{limit}:{offset}"
-        cached_auto = await get_cached(auto_cache_key)
-        if cached_auto is not None:
-            await set_cached(cache_key, cached_auto, ttl=300)
-            return cached_auto
-        search_target = autocorrected_q
-    else:
-        search_target = clean_q
+    corrected_q = clean_q
+    mangas = await catalog.search_titles(db, clean_q, limit=limit, offset=offset)
 
-    mangas = await catalog.search_titles(db, search_target, limit=limit, offset=offset)
+    # Autocorrect is a **fallback**, not a preamble (SVC-05). A query that finds
+    # something is answered exactly as typed: the old order rewrote valid words
+    # (a character name, a romaji term) before the search ever ran, so the user
+    # silently searched for something they did not type.
+    if not mangas:
+        candidate = await autocorrect_query(clean_q, db)
+        if candidate != clean_q:
+            retried = await catalog.search_titles(db, candidate, limit=limit, offset=offset)
+            if retried:
+                mangas = retried
+                corrected_q = candidate
+
     response_data = [MangaDetail.model_validate(manga).model_dump() for manga in mangas]
 
     # Cache response for 5 minutes (300 seconds), under the query as typed and
     # under the corrected form, so both keystroke orders hit.
     await set_cached(cache_key, response_data, ttl=300)
-    if autocorrected_q != clean_q:
-        await set_cached(f"search:{autocorrected_q}:{limit}:{offset}", response_data, ttl=300)
+    if corrected_q != clean_q:
+        await set_cached(f"search:{corrected_q}:{limit}:{offset}", response_data, ttl=300)
 
     return response_data
