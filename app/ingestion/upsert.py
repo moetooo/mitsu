@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..db_models import Manga
 from ..enrichment.models import merge_inferred_tags
+from ..services.format import format_type_for_row, infer_format_type
 from ..sync.identity import (
     ExternalId,
     attach_external_ids,
@@ -62,6 +63,18 @@ async def smart_upsert_manga_ex(
     """
     record = dict(record)
     record.pop("external_ids", None)
+    # Classify once, here, so every write path stores the same thing. Sources
+    # that already provide it (normalize.py) keep their value.
+    record.setdefault(
+        "format_type",
+        infer_format_type(
+            title_native=record.get("title_native"),
+            tags=record.get("tags"),
+            genres=record.get("genres"),
+            site_url=record.get("site_url"),
+            inferred_tags=record.get("inferred_tags"),
+        ),
+    )
     ids: list[ExternalId] = extract_external_ids(record)
     match = await find_match(session, record, allow_title_fallback=allow_title_fallback)
     conflicts = list(match.conflicts)
@@ -159,7 +172,20 @@ def _merge_into(existing: Manga, record: dict[str, Any]) -> None:
         # enough, and a later "safe" rating must not clear it.
         existing.is_nsfw = True
 
-    special_handled = {"alternative_titles", "inferred_tags", "genres", "tags", "is_nsfw"}
+    # The stored format is derived from exactly these fields, so recomputing it
+    # after the merge keeps `format_type` honest when a second source adds the
+    # tag that proves a title is a webtoon (ARCH-05).
+    if {"title_native", "tags", "genres", "site_url", "inferred_tags"} & set(record):
+        existing.format_type = format_type_for_row(existing)
+
+    special_handled = {
+        "alternative_titles",
+        "inferred_tags",
+        "genres",
+        "tags",
+        "is_nsfw",
+        "format_type",  # recomputed above from the merged row, not copied in
+    }
     for key, value in record.items():
         if key in special_handled:
             continue

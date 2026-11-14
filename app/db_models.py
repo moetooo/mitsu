@@ -1,7 +1,7 @@
 from typing import Any
 from sqlalchemy import (
-    BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, Index, Integer,
-    JSON, String, Text, UniqueConstraint, text,
+    BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, ForeignKeyConstraint,
+    Index, Integer, JSON, String, Text, UniqueConstraint, text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from pgvector.sqlalchemy import Vector
@@ -35,6 +35,9 @@ class Manga(Base):
     genres = Column(ARRAY(Text))
     tags: Any = Column(JSONB) # [{"name": "Survival", "rank": 87}, ...]
     status = Column(Text)
+    # Publication format, classified once at write time (ARCH-05). Filtering and
+    # result payloads read this instead of re-deriving it per query.
+    format_type = Column(String(16), nullable=True)
     start_year = Column(Integer)
     chapters = Column(Integer)
     volumes = Column(Integer)
@@ -74,6 +77,16 @@ class DiscoveryQueue(Base):
 
 class RecommendationsEdge(Base):
     __tablename__ = "recommendations_edges"
+    __table_args__ = (
+        # Declared so a fresh database gets the same referential integrity the
+        # deployed one already has (PIPE-15: the ORM and the DDL disagreed).
+        ForeignKeyConstraint(
+            ["manga_id_from"], ["manga.id"], name="recommendations_edges_manga_id_from_fkey"
+        ),
+        ForeignKeyConstraint(
+            ["manga_id_to"], ["manga.id"], name="recommendations_edges_manga_id_to_fkey"
+        ),
+    )
 
     manga_id_from = Column(Integer, primary_key=True)
     manga_id_to = Column(Integer, primary_key=True)
@@ -89,10 +102,13 @@ class MangaExternalId(Base):
     __tablename__ = "manga_external_ids"
     __table_args__ = (
         UniqueConstraint("source", "external_id", name="uq_manga_external_ids_source_external"),
+        # One index on manga_id, named explicitly: `index=True` produced a second
+        # identical index (`ix_manga_external_ids_manga_id`) next to this one.
+        Index("idx_manga_external_ids_manga", "manga_id"),
     )
 
     id = Column(BigInteger, primary_key=True, autoincrement=True)
-    manga_id = Column(Integer, ForeignKey("manga.id", ondelete="CASCADE"), nullable=False, index=True)
+    manga_id = Column(Integer, ForeignKey("manga.id", ondelete="CASCADE"), nullable=False)
     source = Column(String(32), nullable=False)
     external_id = Column(String(128), nullable=False)
     confidence = Column(Float, nullable=False, server_default=text("1.0"))
@@ -164,6 +180,7 @@ Index('idx_manga_tags', Manga.tags, postgresql_using='gin')
 Index('idx_manga_alt_titles', Manga.alternative_titles, postgresql_using='gin')
 Index('idx_manga_inferred_tags', Manga.inferred_tags, postgresql_using='gin')
 Index('idx_manga_status', Manga.status)
+Index('idx_manga_format_type', Manga.format_type)
 Index('idx_manga_start_year', Manga.start_year)
 Index('idx_manga_title_english_trgm', Manga.title_english, postgresql_using='gin', postgresql_ops={'title_english': 'gin_trgm_ops'})
 Index('idx_manga_title_romaji_trgm', Manga.title_romaji, postgresql_using='gin', postgresql_ops={'title_romaji': 'gin_trgm_ops'})
@@ -193,6 +210,9 @@ Index(
 
 # Graph traversal from a seed manga (reverse edges).
 Index('idx_reco_edges_to', RecommendationsEdge.manga_id_to)
+# Newest-first listings: the audit log is read by recency and by status.
+Index('idx_sync_runs_started', SyncRun.started_at.desc())
+Index('idx_sync_runs_status', SyncRun.status, SyncRun.started_at.desc())
 Index('idx_reco_edges_votes', RecommendationsEdge.vote_count.desc())
 
 # Enrichment workers poll pending rows by source.

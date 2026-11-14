@@ -28,7 +28,7 @@ from .guardrails import (
     preflight_trigger,
 )
 from .identity import ExternalId, attach_external_ids, normalize_external_id
-from .schema import ensure_sync_schema, seed_external_ids
+from .schema import seed_external_ids, verify_schema
 
 logger = logging.getLogger("mitsu.sync.service")
 
@@ -470,7 +470,7 @@ async def run_sync(
         return summary
 
     try:
-        await ensure_sync_schema()
+        await verify_schema()
         await seed_external_ids()
     except Exception as exc:
         summary["status"] = "failed"
@@ -856,7 +856,7 @@ async def run_backfill(
         return summary
 
     try:
-        await ensure_sync_schema()
+        await verify_schema()
         await seed_external_ids()
     except Exception as exc:
         summary["status"] = "failed"

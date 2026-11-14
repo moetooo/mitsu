@@ -6,7 +6,7 @@ import json
 import logging
 import sys
 
-from .schema import ensure_sync_schema, seed_external_ids
+from .schema import seed_external_ids, verify_schema
 from .service import run_backfill, run_sync, sync_status
 from ..config import settings
 
@@ -82,7 +82,7 @@ async def _status() -> int:
 
 
 async def _migrate() -> int:
-    await ensure_sync_schema()
+    await verify_schema()
     inserted = await seed_external_ids()
     print(json.dumps({"status": "ok", "seed_inserted": inserted}, indent=2))
     return 0

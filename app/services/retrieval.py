@@ -13,6 +13,10 @@ from ..services import cache
 from ..config import settings
 from ..enrichment.vocabulary import CANONICAL_VOCABULARY
 from .safety import safety_filter
+from .format import (
+    build_format_sql_condition as _build_format_sql_condition,
+    infer_format_type as _infer_format_type,
+)
 
 DEFAULT_CATEGORY_WEIGHTS: Dict[str, float] = {
     "relationship": 1.00,
@@ -228,76 +232,13 @@ def build_genre_sql_condition(
     return "(" + combined + ")"
 
 def build_format_sql_condition(raw_fmts: List[str]) -> Optional[str]:
-    """Builds an accurate SQL condition distinguishing Japanese Manga from Korean Manhwa and Chinese Manhua."""
-    if not raw_fmts:
-        return None
-    fmt_conditions = []
-    for f in raw_fmts:
-        ft = f.lower().strip()
-        if ft == 'manhwa':
-            fmt_conditions.append(
-                "("
-                "("
-                "title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]' "
-                "OR tags @> '[{\"name\": \"Manhwa\"}]' "
-                "OR tags @> '[{\"name\": \"Webtoon\"}]' "
-                "OR tags @> '[{\"name\": \"Korean\"}]' "
-                "OR genres @> ARRAY['Manhwa'] "
-                "OR site_url ILIKE '%manhwa%' "
-                "OR (inferred_tags IS NOT NULL AND inferred_tags @> '[{\"slug\": \"manhwa\"}]')"
-                ") "
-                "AND NOT ("
-                "tags @> '[{\"name\": \"Manhua\"}]' "
-                "OR tags @> '[{\"name\": \"Chinese\"}]' "
-                "OR tags @> '[{\"name\": \"Ancient China\"}]' "
-                "OR genres @> ARRAY['Manhua'] "
-                "OR site_url ILIKE '%manhua%'"
-                ")"
-                ")"
-            )
-        elif ft == 'manhua':
-            fmt_conditions.append(
-                "("
-                "("
-                "tags @> '[{\"name\": \"Manhua\"}]' "
-                "OR tags @> '[{\"name\": \"Chinese\"}]' "
-                "OR tags @> '[{\"name\": \"Ancient China\"}]' "
-                "OR genres @> ARRAY['Manhua'] "
-                "OR site_url ILIKE '%manhua%' "
-                "OR (inferred_tags IS NOT NULL AND inferred_tags @> '[{\"slug\": \"manhua\"}]') "
-                "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]' OR title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]') AND (tags @> '[{\"name\": \"Long Strip\"}]' OR tags @> '[{\"name\": \"Full Color\"}]'))"
-                ") "
-                "AND NOT ("
-                "title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]' "
-                "OR tags @> '[{\"name\": \"Manhwa\"}]' "
-                "OR tags @> '[{\"name\": \"Korean\"}]' "
-                "OR genres @> ARRAY['Manhwa'] "
-                "OR site_url ILIKE '%manhwa%'"
-                ")"
-                ")"
-            )
-        elif ft == 'manga':
-            fmt_conditions.append(
-                "NOT ("
-                "title_native ~ '[\\uac00-\\ud7af\\u1100-\\u11ff\\u3130-\\u318f]' "
-                "OR tags @> '[{\"name\": \"Manhwa\"}]' "
-                "OR tags @> '[{\"name\": \"Webtoon\"}]' "
-                "OR tags @> '[{\"name\": \"Korean\"}]' "
-                "OR genres @> ARRAY['Manhwa'] "
-                "OR site_url ILIKE '%manhwa%' "
-                "OR (inferred_tags IS NOT NULL AND inferred_tags @> '[{\"slug\": \"manhwa\"}]') "
-                "OR tags @> '[{\"name\": \"Manhua\"}]' "
-                "OR tags @> '[{\"name\": \"Chinese\"}]' "
-                "OR tags @> '[{\"name\": \"Ancient China\"}]' "
-                "OR genres @> ARRAY['Manhua'] "
-                "OR site_url ILIKE '%manhua%' "
-                "OR (inferred_tags IS NOT NULL AND inferred_tags @> '[{\"slug\": \"manhua\"}]') "
-                "OR (title_native ~ '[\\u4e00-\\u9fff]' AND NOT (title_native ~ '[\\u3040-\\u309f\\u30a0-\\u30ff]') AND (tags @> '[{\"name\": \"Long Strip\"}]' OR tags @> '[{\"name\": \"Full Color\"}]'))"
-                ")"
-            )
-    if not fmt_conditions:
-        return None
-    return f"({' OR '.join(fmt_conditions)})"
+    """Format filter over the stored `manga.format_type` column (ARCH-05).
+
+    Re-exported so existing callers keep working; the definition lives in
+    `app/services/format.py` next to the classifier that fills the column.
+    """
+    return _build_format_sql_condition(raw_fmts)
+
 
 def apply_filter_criteria(
     filters: Optional[RecommendFilters],
@@ -357,53 +298,10 @@ def apply_filter_criteria(
             where_clauses.append(fmt_cond)
 
 
-def infer_format_type(
-    title_native: Optional[str] = None,
-    tags: Any = None,
-    genres: Optional[List[str]] = None,
-    site_url: Optional[str] = None,
-    inferred_tags: Any = None
-) -> str:
-    """Infers whether a title is MANHWA, MANHUA, or MANGA from metadata."""
-    if inferred_tags and isinstance(inferred_tags, list):
-        inferred_slugs = {t.get("slug") for t in inferred_tags if isinstance(t, dict)}
-        if "manhwa" in inferred_slugs:
-            return "MANHWA"
-        if "manhua" in inferred_slugs:
-            return "MANHUA"
-        if "manga" in inferred_slugs:
-            return "MANGA"
+def infer_format_type(*args, **kwargs) -> str:
+    """Re-export of `app.services.format.infer_format_type` (ARCH-05)."""
+    return _infer_format_type(*args, **kwargs)
 
-    tags_str = str(tags) if tags else ""
-    genres_list = genres or []
-    site_str = (site_url or "").lower()
-    has_kana = bool(title_native and KANA_RE.search(title_native))
-    has_hangul = bool(title_native and HANGUL_RE.search(title_native))
-    has_hanzi = bool(title_native and HANZI_RE.search(title_native))
-
-    # Korean Manhwa check (Explicit Korean markers)
-    if (
-        has_hangul or
-        "Manhwa" in genres_list or
-        "Manhwa" in tags_str or
-        "Webtoon" in tags_str or
-        "Korean" in tags_str or
-        "manhwa" in site_str
-    ):
-        return "MANHWA"
-
-    # Chinese Manhua check (Explicit Chinese markers or Hanzi-only webtoons)
-    if (
-        "Manhua" in genres_list or
-        "Manhua" in tags_str or
-        "Chinese" in tags_str or
-        "Ancient China" in tags_str or
-        "manhua" in site_str or
-        (has_hanzi and not has_kana and not has_hangul and ("Long Strip" in tags_str or "Full Color" in tags_str))
-    ):
-        return "MANHUA"
-
-    return "MANGA"
 
 async def find_matched_title(
     session: AsyncSession,
@@ -710,7 +608,9 @@ async def retrieve_similar_manga(
         m.cover_image_url = r.cover_image_url
         m.banner_image = r.banner_image
         m.site_url = r.site_url
-        m.format_type = infer_format_type(r.title_native, r.tags, r.genres, r.site_url, r.inferred_tags)
+        m.format_type = getattr(r, "format_type", None) or infer_format_type(
+            r.title_native, r.tags, r.genres, r.site_url, r.inferred_tags
+        )
 
         score_val = float(r.hybrid_score)
         # Boost perceived match percentage for exact/prefix title matches
@@ -810,7 +710,9 @@ def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target
     for r in diverse_selection:
         title = r.title_english or r.title_romaji or r.title_native or "Unknown Title"
         sim_score = round((r.average_score or 85) / 100.0, 2)
-        fmt = infer_format_type(r.title_native, r.tags, r.genres, r.site_url)
+        fmt = getattr(r, "format_type", None) or infer_format_type(
+            r.title_native, r.tags, r.genres, r.site_url
+        )
         out.append({
             "id": r.id,
             "anilist_id": r.anilist_id,

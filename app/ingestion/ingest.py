@@ -1,43 +1,28 @@
 import asyncio
 import logging
-# pyrefly: ignore [missing-import]
-from sqlalchemy import text
+from datetime import datetime
+
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
+
 from .anilist_client import fetch_page
 from .normalize import anilist_to_record
-from ..db import AsyncSessionLocal, engine, Base
+from .upsert import smart_upsert_manga
+from ..db import AsyncSessionLocal
 from ..db_models import Manga
 from ..services.embedding import generate_embedding
+from ..sync.schema import verify_schema
 
 logger = logging.getLogger("mitsu.ingestion.ingest")
 
-async def init_db():
-    async with engine.begin() as conn:
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector;"))
-        await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm;"))
-        await conn.execute(text("ALTER TABLE manga ADD COLUMN IF NOT EXISTS mal_id INTEGER UNIQUE;"))
-        await conn.execute(text("ALTER TABLE manga ADD COLUMN IF NOT EXISTS mangadex_id VARCHAR UNIQUE;"))
-        await conn.execute(text("ALTER TABLE manga ALTER COLUMN anilist_id DROP NOT NULL;"))
-        await conn.run_sync(Base.metadata.create_all)
-        # Drop legacy IVFFlat index if present
-        await conn.execute(text("DROP INDEX IF EXISTS idx_manga_embedding;"))
-        # HNSW index on vector embeddings for sub-5ms cosine similarity
-        await conn.execute(
-            text("CREATE INDEX IF NOT EXISTS idx_manga_embedding_hnsw ON manga USING hnsw (embedding vector_cosine_ops) WITH (m = 16, ef_construction = 64);")
-        )
-        # GIN Trigram indexes on titles for sub-millisecond similarity and ILIKE search
-        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_manga_title_english_trgm ON manga USING gin (title_english gin_trgm_ops);"))
-        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_manga_title_romaji_trgm ON manga USING gin (title_romaji gin_trgm_ops);"))
-        await conn.execute(text("CREATE INDEX IF NOT EXISTS idx_manga_title_native_trgm ON manga USING gin (title_native gin_trgm_ops);"))
-
-
-from .upsert import smart_upsert_manga
+# A single year never legitimately needs more pages than this; the loop used to
+# be unbounded, so a provider that kept answering with a stale `hasNextPage`
+# could hammer the API (and the budget) forever.
+MAX_PAGES_PER_YEAR = 200
 
 async def upsert_manga(session, record: dict):
     await smart_upsert_manga(session, record)
 
-from sqlalchemy import select
-from datetime import datetime
 
 async def get_existing_anilist_ids(session) -> set:
     result = await session.execute(select(Manga.anilist_id).where(Manga.anilist_id.isnot(None)))
@@ -61,8 +46,15 @@ def _tag_names(record: dict) -> list[str]:
     return names
 
 
-async def run_ingestion(start_year: int = 2000, end_year: int = datetime.now().year):
-    await init_db()
+async def run_ingestion(
+    start_year: int = 2000,
+    end_year: int | None = None,
+    max_pages_per_year: int = MAX_PAGES_PER_YEAR,
+):
+    # Schema changes are Alembic's job (ARCH-03/PIPE-10). This used to build the
+    # HNSW and trigram indexes and rewrite columns on every ingestion run.
+    await verify_schema()
+    end_year = datetime.now().year if end_year is None else end_year
 
     # Nothing is dropped silently any more: every record that cannot be
     # normalised, embedded or upserted lands in one of these counters and is
@@ -82,7 +74,7 @@ async def run_ingestion(start_year: int = 2000, end_year: int = datetime.now().y
             page = 1
             per_page = 50
             
-            while True:
+            while page <= max_pages_per_year:
                 try:
                     data = await fetch_page(
                         page=page, 

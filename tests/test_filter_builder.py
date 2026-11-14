@@ -14,43 +14,26 @@ class TestFilterBuilder(unittest.TestCase):
     # 1. Format SQL Condition Tests
     # -------------------------------------------------------------
     def test_build_format_sql_manga(self):
-        """Manga filter must explicitly exclude Korean Hangul, Manhwa, Manhua, and non-Kana full-color strips."""
+        """The manga filter is a comparison against the stored column (ARCH-05).
+
+        It used to be a NOT(...) expression over Hangul ranges, JSON tag
+        containment and site_url substrings, re-evaluated per query.
+        """
         cond = build_format_sql_condition(["manga"])
-        self.assertIsNotNone(cond)
-        self.assertTrue(cond.startswith("(NOT ("))
-        self.assertIn("\\uac00-\\ud7af", cond, "Must exclude Korean Hangul range")
-        self.assertIn("Manhwa", cond, "Must exclude Manhwa tag")
-        self.assertIn("Webtoon", cond, "Must exclude Webtoon tag")
-        self.assertIn("Korean", cond, "Must exclude Korean tag")
-        self.assertIn("Manhua", cond, "Must exclude Manhua tag")
-        self.assertIn("Chinese", cond, "Must exclude Chinese tag")
-        self.assertIn("Full Color", cond, "Must exclude Full Color digital webtoons without Kana")
-        self.assertIn("\\u3040-\\u309f", cond, "Must preserve Japanese Kana")
+        self.assertEqual(cond, "(format_type = 'MANGA')")
+        self.assertNotIn("title_native", cond)
+        self.assertNotIn("tags @>", cond)
 
     def test_build_format_sql_manhwa(self):
-        """Manhwa filter must match Korean Hangul, Manhwa, Webtoon, and Korean tags while excluding Manhua."""
-        cond = build_format_sql_condition(["manhwa"])
-        self.assertIsNotNone(cond)
-        self.assertIn("\\uac00-\\ud7af", cond)
-        self.assertIn("Manhwa", cond)
-        self.assertIn("Webtoon", cond)
-        self.assertIn("Korean", cond)
-        self.assertIn("Manhua", cond, "Must explicitly exclude Manhua")
+        self.assertEqual(build_format_sql_condition(["manhwa"]), "(format_type = 'MANHWA')")
 
     def test_build_format_sql_manhua(self):
-        """Manhua filter must match Manhua, Chinese, Ancient China, and Full Color."""
-        cond = build_format_sql_condition(["manhua"])
-        self.assertIsNotNone(cond)
-        self.assertIn("Manhua", cond)
-        self.assertIn("Chinese", cond)
-        self.assertIn("Ancient China", cond)
-        self.assertIn("Full Color", cond)
+        self.assertEqual(build_format_sql_condition(["manhua"]), "(format_type = 'MANHUA')")
 
     def test_build_format_sql_multiple(self):
-        """Selecting multiple formats (e.g. manga and manhwa) must combine with OR."""
+        """Selecting several formats is one IN list, not an OR of predicates."""
         cond = build_format_sql_condition(["manga", "manhwa"])
-        self.assertIsNotNone(cond)
-        self.assertIn(" OR ", cond)
+        self.assertEqual(cond, "(format_type IN ('MANGA', 'MANHWA'))")
 
     def test_build_format_sql_empty(self):
         """Empty format list must return None."""
@@ -62,6 +45,13 @@ class TestFilterBuilder(unittest.TestCase):
         cond_upper = build_format_sql_condition(["MANGA"])
         cond_lower = build_format_sql_condition(["manga"])
         self.assertEqual(cond_upper, cond_lower)
+
+    def test_build_format_sql_ignores_unknown_values(self):
+        """An unknown filter value must not be interpolated into SQL."""
+        self.assertIsNone(build_format_sql_condition(["'; DROP TABLE manga; --"]))
+        self.assertEqual(
+            build_format_sql_condition(["manga", "nonsense"]), "(format_type = 'MANGA')"
+        )
 
     # -------------------------------------------------------------
     # 2. Format Inference Tests

@@ -5,7 +5,7 @@ from app.db import AsyncSessionLocal
 from app.db_models import Manga, MangaExternalId
 from app.ingestion.upsert import smart_upsert_manga_ex
 from app.sync.identity import normalize_external_id
-from app.sync.schema import ensure_sync_schema, seed_external_ids
+from app.sync.schema import seed_external_ids, verify_schema
 
 TEST_IDS = {
     "anilist": 9_999_9701,
@@ -38,7 +38,7 @@ async def _cleanup():
 
 @pytest.fixture
 async def sync_schema():
-    await ensure_sync_schema()
+    await verify_schema()
     await _cleanup()
     yield
     await _cleanup()
