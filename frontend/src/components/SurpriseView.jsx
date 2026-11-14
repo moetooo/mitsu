@@ -72,7 +72,8 @@ export default function SurpriseView({
   bookmarks = [], 
   onToggleBookmark, 
   onSelectManga,
-  imageLength = 60
+  imageLength = 60,
+  exhausted = false
 }) {
   // Queue of discovered manga titles
   const [titles, setTitles] = useState(() => (manga ? [manga] : []));
@@ -174,17 +175,26 @@ export default function SurpriseView({
     }
   }, [manga, titles.length]);
 
-  // Fallback: If queue is empty and not actively loading, trigger fetch
+  // Fallback: If queue is empty and not actively loading, trigger fetch.
+  // Two guards keep this from racing the App: a local in-flight flag so a
+  // re-render cannot start a second draw, and `exhausted`, which the App sets
+  // when the last draw answered 404. Without the second one the view pulsed
+  // "Discovering Titles..." and kept asking forever when nothing matched.
+  const fallbackRequestedRef = useRef(false);
   useEffect(() => {
-    if (titles.length === 0 && !loading && onRefreshRef.current) {
-      onRefreshRef.current().then(first => {
-        if (first) {
-          setTitles([first]);
-          seenIdsRef.current.add(first.id);
-        }
-      });
-    }
-  }, [titles.length, loading]);
+    if (titles.length > 0 || loading || exhausted) return;
+    if (fallbackRequestedRef.current) return;
+    if (!onRefreshRef.current) return;
+    fallbackRequestedRef.current = true;
+    onRefreshRef.current().then(first => {
+      if (first) {
+        setTitles([first]);
+        seenIdsRef.current.add(first.id);
+      }
+    }).finally(() => {
+      fallbackRequestedRef.current = false;
+    });
+  }, [titles.length, loading, exhausted]);
 
   // Refill background buffer whenever remaining titles drop below 4
   const refillQueue = useCallback(async () => {
@@ -733,12 +743,17 @@ export default function SurpriseView({
   if (titles.length === 0 || (loading && titles.length === 0)) {
     return (
       <div className="w-full h-full flex flex-col items-center justify-center space-y-3 bg-transparent select-none animate-in fade-in duration-200">
-        <div className="w-9 h-9 rounded-xl bg-[var(--surface-color)] border border-[var(--border-color)] flex items-center justify-center text-[var(--accent-vermillion)] font-bold text-base shadow-md animate-pulse">
+        <div className={`w-9 h-9 rounded-xl bg-[var(--surface-color)] border border-[var(--border-color)] flex items-center justify-center text-[var(--accent-vermillion)] font-bold text-base shadow-md ${exhausted ? '' : 'animate-pulse'}`}>
           ❖
         </div>
-        <span className="text-xs font-mono text-[var(--text-muted)] tracking-widest uppercase animate-pulse">
-          Discovering Titles...
+        <span className={`text-xs font-mono text-[var(--text-muted)] tracking-widest uppercase ${exhausted ? '' : 'animate-pulse'}`}>
+          {exhausted ? 'No titles match these filters' : 'Discovering Titles...'}
         </span>
+        {exhausted && (
+          <span className="text-[11px] font-mono text-[var(--text-muted)]/70 tracking-wide">
+            Loosen a filter, then click Surprise Me again
+          </span>
+        )}
       </div>
     );
   }
