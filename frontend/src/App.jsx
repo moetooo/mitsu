@@ -45,6 +45,11 @@ const INITIAL_SETTINGS = {
 
 const VALID_TABS = ['explore', 'trending', 'surprise', 'bookmarks'];
 
+const newSessionId = () =>
+  (typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : 'session_' + Math.random().toString(36).substring(2, 9));
+
 const getTabFromPath = (path) => {
   const clean = (path || '').replace(/^\/+|\/+$/g, '').split('/')[0].toLowerCase();
   return VALID_TABS.includes(clean) ? clean : 'explore';
@@ -115,32 +120,54 @@ export default function App() {
   const [trendingPage, setTrendingPage] = useState(1);
   const [trendingMangas, setTrendingMangas] = useState([]);
   const [loadingTrending, setLoadingTrending] = useState(false);
-  const [hasMoreTrending, setHasMoreTrending] = useState(true);
+  // Starts false: the sentinel only exists once page 1 has said there is more.
+  // It used to start true, so the observer could ask for page 2 while page 1 was
+  // still in flight and spend an AniList request nobody needed.
+  const [hasMoreTrending, setHasMoreTrending] = useState(false);
 
-  const [sessionId, setSessionId] = useState(() => {
-    return typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'session_' + Math.random().toString(36).substring(2, 9);
-  });
+  const [sessionId, setSessionId] = useState(newSessionId);
   const sessionIdRef = useRef(sessionId);
   useEffect(() => {
     sessionIdRef.current = sessionId;
   }, [sessionId]);
 
-  const handleSurpriseMe = async (forceFresh = false) => {
+  // One sequence number and one AbortController per request channel. A newer
+  // request cancels the older one, and a response whose sequence is stale is
+  // never allowed to write to state — a slow page 1 cannot overwrite page 3.
+  const requestRef = useRef({ search: 0, trending: 0, surprise: 0 });
+  const abortRef = useRef({ search: null, trending: null, surprise: null });
+  const surpriseInFlightRef = useRef(null);
+  // One in-flight load-more per feed. The sentinel and the virtualized list's
+  // row callback can both fire, and neither should spend a second request.
+  const loadMoreInFlightRef = useRef({ search: false, trending: false });
+  // Set when the roulette answers 404: nothing matches the current filters.
+  const [surpriseExhausted, setSurpriseExhausted] = useState(false);
+
+  const beginRequest = (channel) => {
+    abortRef.current[channel]?.abort();
+    const controller = new AbortController();
+    abortRef.current[channel] = controller;
+    const seq = ++requestRef.current[channel];
+    return { controller, isCurrent: () => requestRef.current[channel] === seq };
+  };
+
+  const runSurprise = async (forceFresh) => {
     setLoadingSurprise(true);
+    setSurpriseExhausted(false);
     if (forceFresh) {
       setSurpriseManga(null);
       setSeenRouletteIds([]);
       setSurpriseKey(k => k + 1);
     }
     const currSeen = forceFresh ? [] : seenRouletteIds;
-    const currentSession = forceFresh 
-      ? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : 'session_' + Math.random().toString(36).substring(2, 9))
-      : sessionIdRef.current;
+    const currentSession = forceFresh ? newSessionId() : sessionIdRef.current;
 
     if (forceFresh) {
       setSessionId(currentSession);
       sessionIdRef.current = currentSession;
     }
+
+    const { controller, isCurrent } = beginRequest('surprise');
 
     // Small anticipation delay (~550ms) so "Discovering Titles..." is visibly displayed
     const minDelayPromise = new Promise(resolve => setTimeout(resolve, 550));
@@ -150,6 +177,7 @@ export default function App() {
         fetch(API_ROUTES.roulette, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({
             query: query || null,
             filters: { ...filters, nsfw: settings.allowNsfw },
@@ -160,18 +188,38 @@ export default function App() {
         }),
         minDelayPromise
       ]);
-      if (res.ok) {
-        const data = await res.json();
-        setSurpriseManga(data);
-        setSeenRouletteIds(prev => [...(forceFresh ? [] : prev), data.id]);
-        return data;
+      if (!isCurrent()) return null;
+      if (res.status === 404) {
+        // Nothing matches the filters. Say it once instead of drawing forever.
+        setSurpriseExhausted(true);
+        setSurpriseManga(null);
+        return null;
       }
+      if (!res.ok) throw new Error(`roulette request failed: ${res.status}`);
+      const data = await res.json();
+      if (!isCurrent()) return null;
+      setSurpriseManga(data);
+      setSeenRouletteIds(prev => [...(forceFresh ? [] : prev), data.id]);
+      return data;
     } catch (err) {
+      if (err.name === 'AbortError' || !isCurrent()) return null;
       console.error('Failed to draw roulette recommendation:', err);
+      return null;
     } finally {
-      setLoadingSurprise(false);
+      if (isCurrent()) setLoadingSurprise(false);
     }
-    return null;
+  };
+
+  // Single-flight: the tab effect and the view's own fallback both call this on
+  // a deep link or a Back navigation, and both used to POST. A second non-forced
+  // call now joins the request that is already in flight.
+  const handleSurpriseMe = (forceFresh = false) => {
+    if (!forceFresh && surpriseInFlightRef.current) return surpriseInFlightRef.current;
+    const promise = runSurprise(forceFresh).finally(() => {
+      if (surpriseInFlightRef.current === promise) surpriseInFlightRef.current = null;
+    });
+    surpriseInFlightRef.current = promise;
+    return promise;
   };
 
   const fetchRouletteBatch = async (count = 5) => {
@@ -226,6 +274,10 @@ export default function App() {
         // Aesthetic re-roll / fresh start
         handleSurpriseMe(true);
       } else if (tabId === 'trending') {
+        // The row list is replaced from page 1, so the counter goes back with it;
+        // otherwise the next load-more asks for page N+1 over a page-1 list.
+        setTrendingPage(1);
+        setHasMoreTrending(true);
         fetchTrendingData(1, false);
       } else if (tabId === 'explore' || tabId === 'bookmarks') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -246,8 +298,9 @@ export default function App() {
     }
   }, [activeTab]);
 
-  const fetchTrendingData = (pageNum = 1, append = false) => {
-    if (activeTab !== 'trending') return;
+  const fetchTrendingData = async (pageNum = 1, append = false) => {
+    if (activeTab !== 'trending') return false;
+    const { controller, isCurrent } = beginRequest('trending');
     setLoadingTrending(true);
 
     const limit = 12;
@@ -256,23 +309,33 @@ export default function App() {
 
     const url = API_ROUTES.trending(pageNum, limit, formatParam, genreParam);
 
-    fetch(url)
-      .then(res => res.json())
-      .then(data => {
-        const results = Array.isArray(data) ? data : [];
-        if (pageNum === 1 && !append) {
-          setTrendingMangas(results);
-        } else {
-          setTrendingMangas(prev => {
-            const existingIds = new Set(prev.map(m => m.id));
-            const uniqueNew = results.filter(m => !existingIds.has(m.id));
-            return [...prev, ...uniqueNew];
-          });
-        }
-        setHasMoreTrending(results.length >= limit);
-      })
-      .catch(err => console.error("Trending fetch error:", err))
-      .finally(() => setLoadingTrending(false));
+    try {
+      const res = await fetch(url, { signal: controller.signal });
+      if (!res.ok) throw new Error(`trending request failed: ${res.status}`);
+      const data = await res.json();
+      if (!isCurrent()) return false;
+
+      const results = Array.isArray(data) ? data : [];
+      if (pageNum === 1 && !append) {
+        setTrendingMangas(results);
+      } else {
+        setTrendingMangas(prev => {
+          const existingIds = new Set(prev.map(m => m.id));
+          const uniqueNew = results.filter(m => !existingIds.has(m.id));
+          return [...prev, ...uniqueNew];
+        });
+      }
+      setHasMoreTrending(results.length >= limit);
+      return true;
+    } catch (err) {
+      // A cancelled request is expected, not an error. A failed page leaves
+      // hasMoreTrending alone and reports false so the page counter stays put.
+      if (err.name === 'AbortError') return false;
+      console.error('Trending fetch error:', err);
+      return false;
+    } finally {
+      if (isCurrent()) setLoadingTrending(false);
+    }
   };
 
   useEffect(() => {
@@ -282,10 +345,18 @@ export default function App() {
     }
   }, [activeTab, trendingFormat, trendingGenre]);
 
-  const handleLoadMoreTrending = () => {
+  const handleLoadMoreTrending = async () => {
+    if (loadMoreInFlightRef.current.trending) return;
+    loadMoreInFlightRef.current.trending = true;
     const nextPage = trendingPage + 1;
-    setTrendingPage(nextPage);
-    fetchTrendingData(nextPage, true);
+    // The counter only moves once the page actually arrived. Advancing it first
+    // meant one failed request permanently skipped a page nobody ever saw.
+    try {
+      const ok = await fetchTrendingData(nextPage, true);
+      if (ok) setTrendingPage(nextPage);
+    } finally {
+      loadMoreInFlightRef.current.trending = false;
+    }
   };
 
   useEffect(() => {
@@ -339,8 +410,9 @@ export default function App() {
     if (e) e.preventDefault();
     const searchQuery = customQuery !== null ? customQuery : query;
     const activeFilters = customFilters !== null ? customFilters : filters;
-    if (!searchQuery.trim()) return;
+    if (!searchQuery.trim()) return false;
 
+    const { controller, isCurrent } = beginRequest('search');
     setLoading(true);
     setSearched(true);
     if (pageNum === 1) setPage(1);
@@ -349,6 +421,7 @@ export default function App() {
       const res = await fetch(API_ROUTES.recommend, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        signal: controller.signal,
         body: JSON.stringify({
           query: searchQuery,
           filters: { ...activeFilters, nsfw: settings.allowNsfw },
@@ -356,7 +429,10 @@ export default function App() {
           page: pageNum
         })
       });
+      if (!res.ok) throw new Error(`recommend request failed: ${res.status}`);
       const data = await res.json();
+      // A superseded page must not append: it would duplicate or reorder rows.
+      if (!isCurrent()) return false;
 
       const newResults = data.results || [];
       if (pageNum === 1) {
@@ -370,20 +446,29 @@ export default function App() {
       }
 
       setHasMore(newResults.length >= settings.limit);
+      return true;
     } catch (err) {
+      if (err.name === 'AbortError') return false;
       console.error('Search error:', err);
+      return false;
     } finally {
-      setLoading(false);
+      if (isCurrent()) setLoading(false);
     }
   };
 
   // Option B: Search triggers strictly on explicit Enter keypress or Search button submission.
   // Debounced auto-search on typing has been removed.
 
-  const handleLoadMore = () => {
+  const handleLoadMore = async () => {
+    if (loadMoreInFlightRef.current.search) return;
+    loadMoreInFlightRef.current.search = true;
     const nextPage = page + 1;
-    setPage(nextPage);
-    handleSearch(null, query, nextPage, filters);
+    try {
+      const ok = await handleSearch(null, query, nextPage, filters);
+      if (ok) setPage(nextPage);
+    } finally {
+      loadMoreInFlightRef.current.search = false;
+    }
   };
 
   const handleTagClick = (tag) => {
@@ -588,6 +673,7 @@ export default function App() {
                 onToggleBookmark={handleToggleBookmark}
                 onSelectManga={setSelectedManga}
                 imageLength={settings.surpriseImageLength || 60}
+                exhausted={surpriseExhausted}
               />
             </Suspense>
 
