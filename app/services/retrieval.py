@@ -4,6 +4,7 @@ import json
 import asyncio
 import time
 import re
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Dict, Any, Set, Tuple
@@ -149,6 +150,86 @@ def generate_filter_hash(filters: Optional[RecommendFilters]) -> str:
 
 def _sql_literal(value: str) -> str:
     return value.replace("'", "''")
+
+
+async def apply_ann_settings(session: AsyncSession, ef_search: Optional[int] = None) -> None:
+    """Apply the pgvector ANN settings for the current transaction.
+
+    These must be set here rather than on the connection pool because pgvector is
+    loaded lazily: until the `vector` type is used in a session the GUCs do not
+    exist, so a startup parameter or a connect-time SET raises
+    `unrecognized configuration parameter "hnsw.ef_search"`.
+
+    `set_config(..., true)` is transaction-local, so a pooled connection is never
+    left carrying one caller's setting -- the same reason
+    `find_matched_title` sets the pg_trgm thresholds this way.
+
+    `hnsw.iterative_scan = 'relaxed_order'` is what makes an ANN scan able to
+    return more than `ef_search` rows. Measured against a 95k-row catalog:
+    `ORDER BY embedding <=> q LIMIT 100` returned 39 rows with the default
+    `ef_search = 40`, and 100 once relaxed_order was on.
+    """
+    ef = int(ef_search if ef_search is not None else settings.HNSW_EF_SEARCH)
+    iterative = (settings.HNSW_ITERATIVE_SCAN or "off").strip().lower()
+    if iterative not in ("off", "relaxed_order", "strict_order"):
+        iterative = "off"
+    await session.execute(
+        text(
+            "SELECT set_config('hnsw.ef_search', :ef, true), "
+            "set_config('hnsw.iterative_scan', :iterative, true)"
+        ),
+        {"ef": str(ef), "iterative": iterative},
+    )
+
+
+def compute_pool_limit(offset: int, limit: int) -> int:
+    """ANN candidate budget for one page.
+
+    The pool has to cover the requested page *before* the CTE's title
+    de-duplication and relevance filter run, so it scales with `offset + limit`
+    and multiplies by a headroom factor.
+
+    The previous formula clamped the result to `HNSW_EF_SEARCH` (200), which made
+    the offset term inert -- every page asked for exactly 200 candidates, so
+    anything past the first few pages was silently unreachable. The ceiling is
+    now a separate setting, and completeness is delivered by
+    `hnsw.iterative_scan` rather than by keeping the pool small.
+    """
+    needed = max(0, int(offset)) + max(1, int(limit))
+    pool = max(settings.HNSW_EF_SEARCH, needed * max(1, settings.HNSW_POOL_HEADROOM))
+    return min(pool, max(settings.HNSW_EF_SEARCH, settings.HNSW_MAX_POOL_LIMIT))
+
+
+def similar_edges_are_fresh(manga: Any, max_age_days: Optional[int] = None) -> bool:
+    """Is this row's precomputed `similar_mangas` list still usable?
+
+    The edges are produced only by the precomputation job, which used to skip any
+    row that already had them, so a re-embedded title kept neighbours calculated
+    from its old vector forever. `similarities_computed_at` existed but nothing
+    read it.
+
+    A row is usable only when it has edges *and* a timestamp inside the window.
+    A row with edges but no timestamp is treated as stale, because its age is
+    unknown rather than zero. Rows the ingestion pipeline invalidated have both
+    fields cleared, so they also read as not-fresh and fall back to a live ANN
+    query.
+    """
+    edges = getattr(manga, "similar_mangas", None)
+    if not edges:
+        return False
+
+    written_at = getattr(manga, "similarities_computed_at", None)
+    if written_at is None:
+        return False
+
+    days = settings.SIMILAR_EDGES_MAX_AGE_DAYS if max_age_days is None else max_age_days
+    if days <= 0:
+        return True
+
+    now = datetime.now(timezone.utc)
+    if written_at.tzinfo is None:
+        written_at = written_at.replace(tzinfo=timezone.utc)
+    return (now - written_at) <= timedelta(days=days)
 
 
 def _tag_json_condition(tag_name: str, key: str, params: Optional[Dict[str, Any]]) -> str:
@@ -477,9 +558,14 @@ async def retrieve_similar_manga(
     # idx_manga_embedding_hnsw. Ranking and dedup then run on a bounded
     # candidate pool instead of scanning the whole partitioned table.
     # ------------------------------------------------------------------
-    pool_limit = max(200, (offset + limit) * 15)
-    pool_limit = min(pool_limit, max(10, settings.HNSW_EF_SEARCH))
+    pool_limit = compute_pool_limit(offset, limit)
     params["pool_limit"] = pool_limit
+
+    # pgvector runs at its default ef_search (40) and with iterative_scan off
+    # unless this is set, which caps an ordered ANN scan at ef_search candidates:
+    # `LIMIT 100` returned 39 rows. apply_ann_settings is transaction-local, so it
+    # has to precede the query on the same session.
+    await apply_ann_settings(session)
 
     pool_columns = """
             id, anilist_id, mal_id, mangadex_id,
@@ -576,8 +662,13 @@ async def retrieve_similar_manga(
     result = await session.execute(sql, params)
     rows = result.all()
 
-    # Selective SQL filters can shrink the ANN pool below the requested page.
-    # Re-run the exact (non-ANN) ordering only in that underfill case.
+    # Selective SQL filters can still shrink the pool below the requested page,
+    # because the HNSW index cannot apply them and they are checked per candidate.
+    # This retry drops the explicit ORDER BY ... LIMIT pool and lets the planner
+    # choose; note that with the HNSW index available the planner may still use
+    # it, so this is a second plan rather than a guaranteed exact scan. A truly
+    # exact scan costs ~5.6 s for 300 rows on a 95k-row catalog and is not
+    # something to put on a request path.
     if filters is not None and len(rows) < max(1, limit) and settings.DB_ENABLE_HNSW_FALLBACK:
         try:
             result = await session.execute(legacy_sql, params)
@@ -709,10 +800,14 @@ def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target
     out = []
     for r in diverse_selection:
         title = r.title_english or r.title_romaji or r.title_native or "Unknown Title"
-        sim_score = round((r.average_score or 85) / 100.0, 2)
         fmt = getattr(r, "format_type", None) or infer_format_type(
             r.title_native, r.tags, r.genres, r.site_url
         )
+        # No similarity is computed for roulette, so no similarity_score is
+        # reported. The previous value was `average_score / 100` with a default
+        # of 85 -- a community score presented as a match percentage, so an
+        # unrated title claimed an 85% "match". `average_score` is already its
+        # own field below.
         out.append({
             "id": r.id,
             "anilist_id": r.anilist_id,
@@ -728,7 +823,7 @@ def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target
             "chapters": r.chapters,
             "volumes": r.volumes,
             "average_score": r.average_score,
-            "similarity_score": sim_score,
+            "similarity_score": None,
             "llm_reasoning": "Discovery Roulette candidate.",
             "format_type": fmt
         })

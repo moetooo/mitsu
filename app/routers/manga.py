@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from ..db import get_db
 from ..db_models import Manga
 from ..models import MangaDetail, RecommendationResult, RecommendFilters
-from ..services.retrieval import retrieve_similar_manga
+from ..services.retrieval import retrieve_similar_manga, similar_edges_are_fresh
 from ..services.cache import get_cached, set_cached
 from ..services.safety import resolve_is_nsfw, row_is_nsfw, safety_filter
 
@@ -430,16 +430,25 @@ async def get_similar_manga(manga_id: int, response: Response, limit: int = 6, a
     if not manga:
         raise HTTPException(status_code=404, detail="Manga not found")
 
-    has_precomputed_edges = bool(getattr(manga, "similar_mangas", None))
-    if manga.embedding is None and not has_precomputed_edges:
+    # Precomputed neighbours are only *preferred* while they are fresh. Before
+    # this check the column was write-once: a re-embedded row kept the neighbours
+    # computed from its old vector, and the endpoint preferred that stale answer
+    # over a live ANN query forever.
+    #
+    # Stale edges are still *served* when there is no vector to recompute from --
+    # an old answer beats a 404 -- but the fresh case wins whenever both exist.
+    has_edges = bool(getattr(manga, "similar_mangas", None))
+    edges_fresh = similar_edges_are_fresh(manga)
+    if manga.embedding is None and not has_edges:
         # Either signal is enough: the precomputed `similar_mangas` edges are a
         # stored answer that does not need the vector. Requiring an embedding
         # turned a usable row into a 404.
         raise HTTPException(status_code=404, detail="No similarity data for this manga")
 
+    use_precomputed_edges = edges_fresh or manga.embedding is None
     candidates = []
 
-    if has_precomputed_edges:
+    if use_precomputed_edges:
         # Resolve the whole edge list. Pre-slicing it to limit + 10 decided before
         # the NSFW filter how many candidates could be considered, so a later
         # clean title could never fill the page.

@@ -54,8 +54,26 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE_S: int = int(os.getenv("DB_POOL_RECYCLE_S", "1800"))
     DB_STATEMENT_TIMEOUT_MS: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "15000"))
     DB_COMMAND_TIMEOUT_S: float = float(os.getenv("DB_COMMAND_TIMEOUT_S", "20"))
+    # Quality knob for the ANN graph walk. pgvector treats it as a hard ceiling on
+    # the candidate list unless iterative_scan is on, so it is no longer used to
+    # cap the pool and completeness comes from HNSW_ITERATIVE_SCAN instead.
     HNSW_EF_SEARCH: int = int(os.getenv("HNSW_EF_SEARCH", "200"))
+    # `relaxed_order` lets pgvector keep scanning past ef_search until the LIMIT is
+    # satisfied. Without it a LIMIT larger than ef_search returns fewer rows than
+    # asked for (measured: 39 of 100 at the default ef_search=40).
+    HNSW_ITERATIVE_SCAN: str = os.getenv("HNSW_ITERATIVE_SCAN", "relaxed_order")
+    # How many ANN candidates to fetch per requested row. The pool has to survive
+    # the title de-duplication and the relevance filter inside the CTE, so it is
+    # deliberately larger than the page.
+    HNSW_POOL_HEADROOM: int = int(os.getenv("HNSW_POOL_HEADROOM", "5"))
+    # Ceiling on that pool. Measured on a 95k-row catalog, 300 candidates took
+    # ~24 ms; an unbounded pool would let `page=100` ask for ~75k.
+    HNSW_MAX_POOL_LIMIT: int = int(os.getenv("HNSW_MAX_POOL_LIMIT", "1000"))
     DB_ENABLE_HNSW_FALLBACK: bool = os.getenv("DB_ENABLE_HNSW_FALLBACK", "true").lower() in ("true", "1", "yes")
+    # Precomputed `similar_mangas` edges older than this are ignored by
+    # /manga/{id}/similar in favour of a live ANN query. The edges were never
+    # invalidated before, so a re-embedded row served stale neighbours forever.
+    SIMILAR_EDGES_MAX_AGE_DAYS: int = int(os.getenv("SIMILAR_EDGES_MAX_AGE_DAYS", "30"))
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
