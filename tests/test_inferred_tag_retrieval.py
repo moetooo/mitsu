@@ -126,11 +126,14 @@ def test_e_candidate_no_metadata_remains_eligible():
 
 
 def test_f_existing_filters_still_work():
-    """Test F: Format and genre filter conditions continue to work and support inferred tags."""
-    # Format SQL condition with inferred_tags support
+    """Test F: Format and genre filter conditions continue to work.
+
+    The format filter reads the stored column now (ARCH-05); the manhwa/manhua
+    distinction is decided when the row is written, so the filter no longer has
+    to re-derive it from inferred_tags on every query.
+    """
     manhwa_sql = build_format_sql_condition(["manhwa"])
-    assert "inferred_tags @> '[{\"slug\": \"manhwa\"}]'" in manhwa_sql
-    assert "NOT" in manhwa_sql  # Excludes manhua
+    assert manhwa_sql == "(format_type = 'MANHWA')"
 
     # Genre SQL condition unchanged
     genre_sql = build_genre_sql_condition(["Action"])

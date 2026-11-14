@@ -35,6 +35,9 @@ class Manga(Base):
     genres = Column(ARRAY(Text))
     tags: Any = Column(JSONB) # [{"name": "Survival", "rank": 87}, ...]
     status = Column(Text)
+    # Publication format, classified once at write time (ARCH-05). Filtering and
+    # result payloads read this instead of re-deriving it per query.
+    format_type = Column(String(16), nullable=True)
     start_year = Column(Integer)
     chapters = Column(Integer)
     volumes = Column(Integer)
@@ -177,6 +180,7 @@ Index('idx_manga_tags', Manga.tags, postgresql_using='gin')
 Index('idx_manga_alt_titles', Manga.alternative_titles, postgresql_using='gin')
 Index('idx_manga_inferred_tags', Manga.inferred_tags, postgresql_using='gin')
 Index('idx_manga_status', Manga.status)
+Index('idx_manga_format_type', Manga.format_type)
 Index('idx_manga_start_year', Manga.start_year)
 Index('idx_manga_title_english_trgm', Manga.title_english, postgresql_using='gin', postgresql_ops={'title_english': 'gin_trgm_ops'})
 Index('idx_manga_title_romaji_trgm', Manga.title_romaji, postgresql_using='gin', postgresql_ops={'title_romaji': 'gin_trgm_ops'})

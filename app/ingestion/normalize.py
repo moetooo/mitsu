@@ -2,6 +2,7 @@ from typing import Dict, Any
 from datetime import datetime, timezone
 import re
 
+from ..services.format import infer_format_type
 from ..services.safety import resolve_is_nsfw
 
 def _from_epoch(value) -> datetime | None:
@@ -61,12 +62,22 @@ def anilist_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
         "site_url": raw.get("siteUrl"),
         "source_updated_at": _from_epoch(raw.get("updatedAt")),
         "sync_source": "anilist",
+        "format_type": infer_format_type(
+            title_native=raw.get("title", {}).get("native"),
+            tags=raw.get("tags"),
+            genres=raw.get("genres"),
+            site_url=raw.get("siteUrl"),
+        ),
         "is_nsfw": resolve_is_nsfw(
             is_adult=raw.get("isAdult"),
             genres=raw.get("genres"),
             tags=raw.get("tags"),
         ),
     }
+
+#: MangaDex `originalLanguage` -> publication format.
+_ORIGINAL_LANGUAGE_FORMAT = {"ko": "MANHWA", "zh": "MANHUA", "zh-hk": "MANHUA", "ja": "MANGA"}
+
 
 def mangadex_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
     attr = raw.get("attributes", {})
@@ -123,6 +134,11 @@ def mangadex_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
         "site_url": f"https://mangadex.org/title/{md_id}",
         "source_updated_at": _from_iso(attr.get("updatedAt")),
         "sync_source": "mangadex",
+        # MangaDex has no native titles, but `originalLanguage` is an explicit
+        # Korean/Chinese/Japanese marker — better evidence than tag guessing.
+        "format_type": _ORIGINAL_LANGUAGE_FORMAT.get(
+            (attr.get("originalLanguage") or "").lower()
+        ) or infer_format_type(tags=tags, genres=genres, site_url=f"https://mangadex.org/title/{md_id}"),
         # MangaDex is the only source that publishes an explicit contentRating
         # (safe | suggestive | erotica | pornographic). Ignoring it meant every
         # adult MangaDex title reached the catalog with no NSFW signal at all.
