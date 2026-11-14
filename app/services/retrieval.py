@@ -745,17 +745,25 @@ async def retrieve_similar_manga(
             r.title_native, r.tags, r.genres, r.site_url, r.inferred_tags
         )
 
+        # The displayed score is the score the ranking actually used.
+        #
+        # It used to be floored: `max(score, 0.96)` for an exact title and
+        # `max(score, 0.88)` for a prefix, applied after the query ran. That
+        # turned a real 0.42 similarity into a rendered "96%", and it made
+        # three genuinely different matches (Berserk: The Prototype, Berserk:
+        # The Flame Dragon Knight, Berserk of Gluttony) all render as exactly
+        # "88%" -- the floor value, not a measured one.
+        #
+        # The title preference is not lost by removing this: `title_boost`
+        # already enters `hybrid_score` as a 0.30-weighted term in the SQL, so
+        # exact and prefix hits still rank first. Only the dishonest number is
+        # gone.
         score_val = float(r.hybrid_score)
-        # Boost perceived match percentage for exact/prefix title matches
-        if hasattr(r, 'title_boost'):
-            if r.title_boost >= 1.0:
-                score_val = max(score_val, 0.96)
-            elif r.title_boost >= 0.6:
-                score_val = max(score_val, 0.88)
 
         cand_dict = {
             "manga": m,
             "similarity_score": score_val,
+            "title_boost": float(getattr(r, "title_boost", 0.0) or 0.0),
             "format_type": m.format_type
         }
         if hasattr(r, 'tag_alignment'):
