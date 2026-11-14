@@ -2,6 +2,8 @@ import { useState, useEffect, useRef } from 'react';
 
 const RECENT_QUERIES_KEY = 'mitsu_recent_queries';
 const MAX_RECENT = 5;
+const RECENT_LIST_ID = 'searchbar-recent-queries';
+const recentOptionId = (index) => `searchbar-recent-option-${index}`;
 
 function getRecentQueries() {
   try {
@@ -40,8 +42,17 @@ export default function SearchBar({
   const [isFocused, setIsFocused] = useState(false);
   const [showRecent, setShowRecent] = useState(false);
   const [recentQueries, setRecentQueries] = useState(getRecentQueries);
+  const [activeIndex, setActiveIndex] = useState(-1);
   const dropdownRef = useRef(null);
   const inputRef = useRef(null);
+  // FE-20: the blur timer used to be unreferenced, so it fired after unmount
+  // (and after the component had already been replaced) and could never be
+  // cancelled.
+  const blurTimerRef = useRef(null);
+
+  useEffect(() => () => {
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+  }, []);
 
   // Refresh recent queries from localStorage when dropdown opens
   useEffect(() => {
@@ -68,13 +79,19 @@ export default function SearchBar({
     // Only show dropdown if input is empty or has little text, and there are recent queries
     if (getRecentQueries().length > 0) {
       setShowRecent(true);
+      setActiveIndex(-1);
     }
   };
 
   const handleBlur = () => {
     setIsFocused(false);
     // Delay hiding to allow click on pills
-    setTimeout(() => setShowRecent(false), 200);
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    blurTimerRef.current = setTimeout(() => {
+      blurTimerRef.current = null;
+      setShowRecent(false);
+      setActiveIndex(-1);
+    }, 200);
   };
 
   const handleSubmit = (e) => {
@@ -84,12 +101,14 @@ export default function SearchBar({
       setRecentQueries(getRecentQueries());
     }
     setShowRecent(false);
+    setActiveIndex(-1);
     onSearch(e);
   };
 
   const handleRecentClick = (recentQuery) => {
     setQuery(recentQuery);
     setShowRecent(false);
+    setActiveIndex(-1);
     // Trigger search with the selected recent query
     saveRecentQuery(recentQuery);
     setRecentQueries(getRecentQueries());
@@ -121,6 +140,39 @@ export default function SearchBar({
   const filteredRecent = query && query.trim()
     ? recentQueries.filter(q => q.toLowerCase().includes(query.trim().toLowerCase()) && q.toLowerCase() !== query.trim().toLowerCase())
     : recentQueries;
+
+  const isRecentOpen = showRecent && filteredRecent.length > 0;
+
+  // Keep the highlighted option inside the list when filtering shrinks it.
+  useEffect(() => {
+    if (activeIndex >= filteredRecent.length) setActiveIndex(-1);
+  }, [activeIndex, filteredRecent.length]);
+
+  // WAI-ARIA combobox keyboard model: Arrow keys move the active option,
+  // Enter picks it, Escape closes only the listbox (and does not reach the
+  // overlay layers behind the page).
+  const handleInputKeyDown = (e) => {
+    if (e.key === 'Escape') {
+      if (isRecentOpen) {
+        e.stopPropagation();
+        setShowRecent(false);
+        setActiveIndex(-1);
+      }
+      return;
+    }
+    if (!isRecentOpen) return;
+
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      setActiveIndex(prev => (prev + 1) % filteredRecent.length);
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      setActiveIndex(prev => (prev <= 0 ? filteredRecent.length - 1 : prev - 1));
+    } else if (e.key === 'Enter' && activeIndex >= 0) {
+      e.preventDefault();
+      handleRecentClick(filteredRecent[activeIndex]);
+    }
+  };
 
   return (
     <div className="max-w-3xl mx-auto relative group" ref={dropdownRef}>
@@ -158,8 +210,15 @@ export default function SearchBar({
           ref={inputRef}
           type="text"
           value={query}
+          role="combobox"
+          aria-expanded={isRecentOpen}
+          aria-controls={RECENT_LIST_ID}
+          aria-autocomplete="list"
+          aria-activedescendant={activeIndex >= 0 && isRecentOpen ? recentOptionId(activeIndex) : undefined}
+          aria-label="Search manga"
           onFocus={handleFocus}
           onBlur={handleBlur}
+          onKeyDown={handleInputKeyDown}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Describe plot, mood, or themes... (e.g. dark fantasy action)"
           className="w-full bg-transparent px-4 py-4 text-sm md:text-base font-serif-jp focus:outline-none placeholder:text-[var(--text-muted)] text-[var(--text-color)]"
@@ -200,6 +259,7 @@ export default function SearchBar({
           type="submit"
           disabled={loading}
           aria-label="Search"
+          aria-busy={loading}
           title="Search"
           className="mr-2.5 w-10 h-10 rounded-full bg-[var(--accent-vermillion)] hover:opacity-90 text-white flex items-center justify-center transition-all active:scale-95 disabled:opacity-50 cursor-pointer shadow-sm shrink-0"
         >
@@ -226,8 +286,11 @@ export default function SearchBar({
       </form>
 
       {/* Feature 10: Recent Queries Dropdown */}
-      {showRecent && filteredRecent.length > 0 && (
+      {isRecentOpen && (
         <div
+          id={RECENT_LIST_ID}
+          role="listbox"
+          aria-label="Recent searches"
           className="absolute left-0 right-0 top-full mt-2 z-50 bg-[var(--surface-color)] border border-[var(--border-color)] rounded-xl shadow-lg overflow-hidden"
           style={{ animation: 'recentDropdownIn 0.15s ease-out' }}
         >
@@ -251,8 +314,12 @@ export default function SearchBar({
             {filteredRecent.map((rq, idx) => (
               <button
                 key={`${rq}-${idx}`}
+                id={recentOptionId(idx)}
                 type="button"
+                role="option"
+                aria-selected={idx === activeIndex}
                 onMouseDown={(e) => e.preventDefault()}
+                onMouseEnter={() => setActiveIndex(idx)}
                 onClick={() => handleRecentClick(rq)}
                 className="group/pill inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-mono bg-[var(--bg-color)] border border-[var(--border-color)] text-[var(--text-color)] hover:border-[var(--accent-vermillion)] hover:text-[var(--accent-vermillion)] transition-all cursor-pointer"
               >
@@ -263,6 +330,9 @@ export default function SearchBar({
                 <span
                   onMouseDown={(e) => e.preventDefault()}
                   onClick={(e) => handleRemoveRecent(e, rq)}
+                  role="button"
+                  tabIndex={-1}
+                  aria-label={`Remove ${rq} from recent searches`}
                   className="ml-0.5 p-0.5 rounded-full text-[var(--text-muted)] hover:text-[var(--accent-vermillion)] hover:bg-[var(--surface-hover)] transition-colors"
                   title="Remove"
                 >

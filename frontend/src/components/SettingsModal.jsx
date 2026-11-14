@@ -1,16 +1,10 @@
-import { useState, useEffect } from 'react';
+import useScrollLock from '../hooks/useScrollLock';
 
 export default function SettingsModal({ settings, setSettings, isOpen, onClose }) {
-  // Lock background window scroll when modal is active to prevent scroll lag and event thrashing
-  useEffect(() => {
-    if (isOpen) {
-      const originalOverflow = document.body.style.overflow;
-      document.body.style.overflow = 'hidden';
-      return () => {
-        document.body.style.overflow = originalOverflow;
-      };
-    }
-  }, [isOpen]);
+  // FE-13: the same counted lock as the detail modal. This used to be a private
+  // copy of the effect; two overlays each saving/restoring their own value meant
+  // whichever closed last decided the page overflow.
+  useScrollLock(Boolean(isOpen));
 
   if (!isOpen) return null;
 

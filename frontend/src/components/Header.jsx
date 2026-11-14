@@ -1,15 +1,17 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 
 export default function Header({ 
   activeTab, 
   setActiveTab, 
   onSelectTab,
   bookmarkCount, 
-  onOpenSettings,
-  theme = 'sumi'
+  onOpenSettings
 }) {
   const [isVisible, setIsVisible] = useState(true);
-  const [lastScrollY, setLastScrollY] = useState(0);
+  // FE-19: the last position lived in state, so it was a dependency of the
+  // effect that registered the listener -- every scroll event tore the listener
+  // down and added it again. A ref keeps the effect mounted once.
+  const lastScrollYRef = useRef(0);
 
   const handleTab = (tab) => {
     if (onSelectTab) {
@@ -22,24 +24,25 @@ export default function Header({
   useEffect(() => {
     const handleScroll = () => {
       const currentScrollY = window.scrollY;
-      
+      const lastScrollY = lastScrollYRef.current;
+
       // Auto-hide when scrolling down past 50px, reveal when scrolling up
       if (currentScrollY > lastScrollY && currentScrollY > 50) {
         setIsVisible(false);
       } else if (currentScrollY < lastScrollY) {
         setIsVisible(true);
       }
-      
-      setLastScrollY(currentScrollY);
+
+      lastScrollYRef.current = currentScrollY;
     };
 
     window.addEventListener('scroll', handleScroll, { passive: true });
     return () => window.removeEventListener('scroll', handleScroll);
-  }, [lastScrollY]);
+  }, []);
 
   return (
     <header className={`sticky top-0 z-40 bg-[var(--bg-color)]/90 backdrop-blur-md border-b border-[var(--border-color)] px-4 md:px-8 py-3.5 transition-all duration-300 ${isVisible ? 'translate-y-0' : '-translate-y-full'}`}>
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
+      <div className="max-w-7xl mx-auto flex items-center justify-between gap-2 sm:gap-4">
         
         {/* Logo */}
         <div 
@@ -49,7 +52,7 @@ export default function Header({
           <div className="w-8 h-8 rounded-lg bg-[var(--surface-color)] border border-[var(--border-color)] flex items-center justify-center text-[var(--accent-vermillion)] font-bold text-sm shadow-sm group-hover:border-[var(--accent-vermillion)] transition-colors">
             ❖
           </div>
-          <div className="flex flex-col">
+          <div className="hidden flex-col sm:flex">
             <span className="font-serif-jp text-lg md:text-xl font-bold tracking-tight text-[var(--text-color)] leading-tight">
               Mit<span className="text-[var(--accent-vermillion)]">su</span>
             </span>
@@ -60,9 +63,11 @@ export default function Header({
         </div>
 
         {/* Navigation Tabs (Centered) */}
-        <nav className="absolute left-1/2 -translate-x-1/2 flex items-center bg-[var(--surface-color)] border border-[var(--border-color)] rounded-full p-1 transition-colors shadow-sm">
+        <nav aria-label="Primary" className="flex min-w-0 items-center overflow-x-auto no-scrollbar bg-[var(--surface-color)] border border-[var(--border-color)] rounded-full p-1 transition-colors shadow-sm">
           <button
             onClick={() => handleTab('explore')}
+            type="button"
+            aria-current={activeTab === 'explore' ? 'page' : undefined}
             className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
               activeTab === 'explore'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
@@ -77,6 +82,8 @@ export default function Header({
 
           <button
             onClick={() => handleTab('trending')}
+            type="button"
+            aria-current={activeTab === 'trending' ? 'page' : undefined}
             className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
               activeTab === 'trending'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
@@ -92,6 +99,8 @@ export default function Header({
 
           <button
             onClick={() => handleTab('surprise')}
+            type="button"
+            aria-current={activeTab === 'surprise' ? 'page' : undefined}
             className={`flex items-center gap-1.5 px-4 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer ${
               activeTab === 'surprise'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'
@@ -106,6 +115,8 @@ export default function Header({
 
           <button
             onClick={() => handleTab('bookmarks')}
+            type="button"
+            aria-current={activeTab === 'bookmarks' ? 'page' : undefined}
             className={`flex items-center gap-2 px-5 py-1.5 rounded-full text-xs font-medium transition-all cursor-pointer relative ${
               activeTab === 'bookmarks'
                 ? 'bg-[var(--accent-vermillion)] text-white shadow-sm font-bold'

@@ -2,8 +2,10 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { isCoverCached, markCoverCached } from '../utils/imageUtils';
 import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 import CoverFallback from './CoverFallback';
+import useEscapeLayer from '../hooks/useEscapeLayer';
+import { formatScore } from '../utils/scoreUtils';
 
-function SurpriseCoverImage({ url, title, allowHover }) {
+function SurpriseCoverImage({ url, title, allowHover, heightPercent = 100 }) {
   const isCached = isCoverCached(url);
   const [loaded, setLoaded] = useState(isCached);
   const [error, setError] = useState(false);
@@ -28,7 +30,12 @@ function SurpriseCoverImage({ url, title, allowHover }) {
   };
 
   return (
-    <div className="absolute inset-0 w-full h-full select-none overflow-hidden bg-neutral-900">
+    // FE-09: `surpriseImageLength` was passed down and never used. It now sets
+    // how much of the card the cover band occupies (50-70%, default 60%).
+    <div
+      style={{ height: `${heightPercent}%` }}
+      className="absolute top-0 left-0 w-full select-none overflow-hidden bg-neutral-900"
+    >
       {/* Feature 34: Shimmer Paper Skeleton Loader matching search cards */}
       {!loaded && !error && url && (
         <div className="absolute inset-0 shimmer-paper-loading z-10 flex flex-col items-center justify-center p-4">
@@ -71,7 +78,6 @@ export default function SurpriseView({
   onOpenFilter,
   bookmarks = [], 
   onToggleBookmark, 
-  onSelectManga,
   imageLength = 60,
   exhausted = false
 }) {
@@ -88,6 +94,10 @@ export default function SurpriseView({
   // Diptych Folio Full Details state & responsive breakpoint
   const [isDetailsOpen, setIsDetailsOpen] = useState(false);
   const [isDesktop, setIsDesktop] = useState(() => (typeof window !== 'undefined' ? window.innerWidth >= 820 : true));
+
+  // FE-08: the details pane is an Escape layer, so it yields to a layer opened
+  // above it (the detail modal) instead of closing alongside it.
+  useEscapeLayer(isDetailsOpen, () => setIsDetailsOpen(false));
 
   // Idle navigation hint state: shows ONLY when inactive for 60 seconds
   const [showHint, setShowHint] = useState(false);
@@ -387,17 +397,13 @@ export default function SurpriseView({
     };
   }, [handleNext, handlePrev, resetIdleHintTimer]);
 
-  // Keyboard navigation (Arrow keys, PageUp/Down, J/K, Escape)
+  // Keyboard navigation (Arrow keys, PageUp/Down, J/K). Escape is not handled
+  // here any more: it belongs to the topmost overlay layer (useEscapeLayer).
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName)) return;
-
-      if (e.key === 'Escape') {
-        if (isDetailsOpen) {
-          setIsDetailsOpen(false);
-          return;
-        }
-      }
+      // An overlay on top of this view owns the keyboard while it is open.
+      if (e.target?.closest?.('[role="dialog"]')) return;
 
       if (e.key === 'ArrowDown' || e.key === 'PageDown' || e.key === 'j') {
         e.preventDefault();
@@ -412,7 +418,7 @@ export default function SurpriseView({
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleNext, handlePrev, resetIdleHintTimer, isDetailsOpen]);
+  }, [handleNext, handlePrev, resetIdleHintTimer]);
 
   // Touch swipe support on card
   const handleTouchStart = (e) => {
@@ -458,16 +464,12 @@ export default function SurpriseView({
   // Renders the Companion Dossier Card Content (Shared between desktop folio & mobile sheet)
   const renderDossierContent = (mangaItem, onClose) => {
     if (!mangaItem) return null;
-    const isBookmarked = Array.isArray(bookmarks) ? bookmarks.some(b => b?.id === mangaItem.id) : false;
     const titleStr = typeof mangaItem.title === 'string' 
       ? mangaItem.title 
       : (mangaItem.title?.english || mangaItem.title?.romaji || mangaItem.title_english || mangaItem.title_romaji || 'Manga Title');
     const anilistUrl = mangaItem.anilist_id 
       ? `https://anilist.co/manga/${mangaItem.anilist_id}` 
       : `https://anilist.co/search/manga?search=${encodeURIComponent(titleStr)}`;
-    const malUrl = mangaItem.mal_id 
-      ? `https://myanimelist.net/manga/${mangaItem.mal_id}` 
-      : `https://myanimelist.net/manga.php?q=${encodeURIComponent(titleStr)}`;
 
     return (
       <div className="p-5 sm:p-6 w-full h-full flex flex-col justify-between select-none bg-transparent">
@@ -510,7 +512,7 @@ export default function SurpriseView({
           <div className="flex flex-wrap gap-2 text-[10px] font-mono">
             {mangaItem.average_score ? (
               <span className="bg-[var(--accent-vermillion)]/15 text-[var(--accent-vermillion)] border border-[var(--accent-vermillion)]/30 px-2.5 py-1 rounded-full font-bold">
-                ★ {mangaItem.average_score > 10 ? (mangaItem.average_score / 10).toFixed(1) : mangaItem.average_score} SCORE
+                ★ {formatScore(mangaItem.average_score)} SCORE
               </span>
             ) : null}
             {mangaItem.chapters ? (
@@ -614,7 +616,8 @@ export default function SurpriseView({
         <SurpriseCoverImage 
           url={mangaItem.cover_image_url} 
           title={cardTitle} 
-          allowHover={allowHover} 
+          allowHover={allowHover}
+          heightPercent={imageLength}
         />
 
         {/* 2. FLOATING TOP HEADER (Status pill & Universal Ribbon Bookmark button) */}
@@ -671,7 +674,7 @@ export default function SurpriseView({
             {/* Score Badge */}
             <div className="shrink-0 flex items-center gap-1.5">
               <span className="text-[10px] font-mono text-[var(--accent-vermillion)] font-bold bg-[var(--surface-color)]/80 px-2 py-0.5 rounded-full border border-[var(--border-color)]">
-                ★ {mangaItem.score ? (mangaItem.score / 10).toFixed(1) : (mangaItem.bayesian_rating ? mangaItem.bayesian_rating.toFixed(1) : (mangaItem.average_score ? (mangaItem.average_score / 10).toFixed(1) : '9.0'))}
+                ★ {formatScore(mangaItem.score) ?? formatScore(mangaItem.average_score) ?? formatScore(mangaItem.bayesian_rating) ?? '—'}
               </span>
             </div>
           </div>
@@ -742,7 +745,11 @@ export default function SurpriseView({
   // Empty or Loading state with aesthetic pulse
   if (titles.length === 0 || (loading && titles.length === 0)) {
     return (
-      <div className="w-full h-full flex flex-col items-center justify-center space-y-3 bg-transparent select-none animate-in fade-in duration-200">
+      <div
+        role="status"
+        aria-live="polite"
+        className="w-full h-full flex flex-col items-center justify-center space-y-3 bg-transparent select-none animate-in fade-in duration-200"
+      >
         <div className={`w-9 h-9 rounded-xl bg-[var(--surface-color)] border border-[var(--border-color)] flex items-center justify-center text-[var(--accent-vermillion)] font-bold text-base shadow-md ${exhausted ? '' : 'animate-pulse'}`}>
           ❖
         </div>

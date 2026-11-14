@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
-import ComparisonSearch from './components/ComparisonSearch';
 import MangaGrid from './components/MangaGrid';
 const BookmarksView = lazy(() => import('./components/BookmarksView'));
 const SurpriseView = lazy(() => import('./components/SurpriseView'));
@@ -119,7 +118,6 @@ export default function App() {
   // Trending Section Divided State & Filters
   const [trendingFormat, setTrendingFormat] = useState('all'); // 'all' | 'manga' | 'manhwa' | 'manhua'
   const [trendingGenre, setTrendingGenre] = useState('all'); // 'all' | 'Action' | 'Fantasy' | ...
-  const [isTop10, setIsTop10] = useState(false);
   const [trendingPage, setTrendingPage] = useState(1);
   const [trendingMangas, setTrendingMangas] = useState([]);
   const [loadingTrending, setLoadingTrending] = useState(false);
@@ -128,11 +126,9 @@ export default function App() {
   // still in flight and spend an AniList request nobody needed.
   const [hasMoreTrending, setHasMoreTrending] = useState(false);
 
-  const [sessionId, setSessionId] = useState(newSessionId);
-  const sessionIdRef = useRef(sessionId);
-  useEffect(() => {
-    sessionIdRef.current = sessionId;
-  }, [sessionId]);
+  // FE-17: the session id lived in state *and* a ref that mirrored it, so the
+  // state was write-only. The ref is the single owner.
+  const sessionIdRef = useRef(newSessionId());
 
   // One sequence number and one AbortController per request channel. A newer
   // request cancels the older one, and a response whose sequence is stale is
@@ -166,7 +162,6 @@ export default function App() {
     const currentSession = forceFresh ? newSessionId() : sessionIdRef.current;
 
     if (forceFresh) {
-      setSessionId(currentSession);
       sessionIdRef.current = currentSession;
     }
 
@@ -497,7 +492,6 @@ export default function App() {
         onSelectTab={handleTabClick}
         bookmarkCount={Array.isArray(bookmarks) ? bookmarks.length : 0}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        theme={settings?.theme || 'sumi'}
       />
 
       <div 
@@ -528,6 +522,7 @@ export default function App() {
                 setIsFilterOpen={setIsFilterOpen}
                 hasActiveFilters={hasActiveFilters}
                 focusStyle={settings.focusStyle || 'glow'}
+                onSurpriseMe={() => handleTabClick('surprise')}
               />
 
               <Suspense fallback={null}>
@@ -624,7 +619,11 @@ export default function App() {
               </div>
 
               {/* Format Origin Sub-Tabs (Aesthetic Floating Capsule) */}
-              <div className="inline-flex max-w-full items-center gap-1 bg-[var(--surface-color)]/80 backdrop-blur-md border border-[var(--border-color)] p-1 rounded-full overflow-x-auto no-scrollbar shadow-xs self-start">
+              <div
+                role="group"
+                aria-label="Trending format"
+                className="inline-flex max-w-full items-center gap-1 bg-[var(--surface-color)]/80 backdrop-blur-md border border-[var(--border-color)] p-1 rounded-full overflow-x-auto no-scrollbar shadow-xs self-start"
+              >
                 {[
                   { id: 'all', label: 'All Formats' },
                   { id: 'manga', label: 'Manga', tag: 'JP' },
@@ -633,7 +632,9 @@ export default function App() {
                 ].map(sub => (
                   <button
                     key={sub.id}
+                    type="button"
                     onClick={() => setTrendingFormat(sub.id)}
+                    aria-pressed={trendingFormat === sub.id}
                     className={`px-3.5 py-1.5 rounded-full text-xs font-mono transition-all cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
                       trendingFormat === sub.id
                         ? 'bg-[var(--accent-vermillion)] text-white font-bold shadow-xs'
@@ -655,7 +656,11 @@ export default function App() {
               </div>
 
               {/* Genre Pills Filter Row */}
-              <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1">
+              <div
+                role="group"
+                aria-label="Trending genre"
+                className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pt-1"
+              >
                 <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1">
                   Genre:
                 </span>
@@ -669,6 +674,7 @@ export default function App() {
                     key={g}
                     type="button"
                     onClick={() => setTrendingGenre(g)}
+                    aria-pressed={trendingGenre === g}
                     className={`px-3 py-1 rounded-full text-xs font-mono border transition-all cursor-pointer whitespace-nowrap ${
                       trendingGenre === g
                         ? 'bg-[var(--accent-indigo)] border-[var(--accent-indigo)] text-white font-bold shadow-xs'
@@ -717,7 +723,6 @@ export default function App() {
                 onOpenFilter={() => setIsFilterOpen(true)}
                 bookmarks={bookmarks}
                 onToggleBookmark={handleToggleBookmark}
-                onSelectManga={setSelectedManga}
                 imageLength={settings.surpriseImageLength || 60}
                 exhausted={surpriseExhausted}
               />

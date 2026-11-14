@@ -1,5 +1,4 @@
 import MangaGrid from './MangaGrid';
-import SectionDivider from './SectionDivider';
 
 export default function BookmarksView({ bookmarks, onSelectManga, onToggleBookmark, onClearAll, gridSize = 'standard', hoverAccent = 'vermillion' }) {
   if (bookmarks.length === 0) {
