@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
 import MangaGrid from './components/MangaGrid';
+import ErrorBanner from './components/ErrorBanner';
 const BookmarksView = lazy(() => import('./components/BookmarksView'));
 const SurpriseView = lazy(() => import('./components/SurpriseView'));
 import HeroBanner from './components/HeroBanner';
@@ -112,6 +113,14 @@ export default function App() {
 
   const [page, setPage] = useState(1);
   const [hasMore, setHasMore] = useState(false);
+
+  // FE-25: "no titles found" and "the request failed" are different answers, and
+  // the grid used to give the first for both. One message per fetch path.
+  const [searchError, setSearchError] = useState(null);
+  const [trendingError, setTrendingError] = useState(null);
+  // FE-15: identity of what is on screen. The grid resets its sort pill when it
+  // changes, and keeps it when the same set just grows by a page.
+  const [searchResultKey, setSearchResultKey] = useState('');
 
   // LocalStorage Bookmarks state
   const [bookmarks, setBookmarks] = useState(() => {
@@ -346,6 +355,7 @@ export default function App() {
     if (activeTab !== 'trending') return false;
     const { controller, isCurrent } = beginRequest('trending');
     setLoadingTrending(true);
+    if (pageNum === 1) setTrendingError(null);
 
     const limit = 12;
     const formatParam = trendingFormat !== 'all' ? `&format_type=${trendingFormat}` : '';
@@ -376,6 +386,10 @@ export default function App() {
       // hasMoreTrending alone and reports false so the page counter stays put.
       if (err.name === 'AbortError') return false;
       console.error('Trending fetch error:', err);
+      if (isCurrent() && pageNum === 1) {
+        setTrendingError('The catalogue did not answer. Try again in a moment.');
+        setTrendingMangas([]);
+      }
       return false;
     } finally {
       if (isCurrent()) setLoadingTrending(false);
@@ -459,7 +473,11 @@ export default function App() {
     const { controller, isCurrent } = beginRequest('search');
     setLoading(true);
     setSearched(true);
-    if (pageNum === 1) setPage(1);
+    setSearchError(null);
+    if (pageNum === 1) {
+      setPage(1);
+      setSearchResultKey(`${searchQuery}|${JSON.stringify(activeFilters)}`);
+    }
 
     try {
       const res = await fetch(API_ROUTES.recommend, {
@@ -496,6 +514,12 @@ export default function App() {
     } catch (err) {
       if (err.name === 'AbortError') return false;
       console.error('Search error:', err);
+      if (isCurrent()) {
+        setSearchError('The recommendation service did not answer. The titles you saw before are still here.');
+        // A failed first page must not leave the previous query's rows on screen
+        // as if they were this query's results.
+        if (pageNum === 1) setMangas([]);
+      }
       return false;
     } finally {
       if (isCurrent()) setLoading(false);
@@ -624,7 +648,13 @@ export default function App() {
                   </button>
                 </div>
               )}
+              <ErrorBanner
+                message={searchError}
+                label="Search failed"
+                onRetry={() => handleSearch(null, query, 1, filters)}
+              />
               <MangaGrid
+                resultKey={searchResultKey}
                 mangas={mangas}
                 loading={loading}
                 hasSearched={searched}
@@ -734,7 +764,13 @@ export default function App() {
             </div>
 
             {/* FORMAT CATALOG GRID VIEW */}
+            <ErrorBanner
+              message={trendingError}
+              label="Catalogue unavailable"
+              onRetry={() => fetchTrendingData(1, false)}
+            />
             <MangaGrid
+              resultKey={`trending:${trendingFormat}:${trendingGenre}`}
               mangas={trendingMangas}
               loading={loadingTrending}
               hasSearched={true}

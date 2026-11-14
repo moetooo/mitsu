@@ -4,6 +4,7 @@ import { normalizeTag, getTagStyle } from '../utils/tagUtils';
 import CoverFallback from './CoverFallback';
 import useEscapeLayer from '../hooks/useEscapeLayer';
 import { formatScore } from '../utils/scoreUtils';
+import { cleanSynopsis } from '../utils/text';
 
 function SurpriseCoverImage({ url, title, allowHover, heightPercent = 100 }) {
   const isCached = isCoverCached(url);
@@ -361,11 +362,6 @@ export default function SurpriseView({
     }
   };
 
-  const getCleanSynopsis = (text) => {
-    if (!text) return 'No synopsis description available for this title.';
-    if (typeof text !== 'string') return String(text);
-    return text.replace(/<[^>]*>?/gm, '').replace(/&quot;/g, '"').replace(/&#39;/g, "'");
-  };
 
   // Filter counters
   const excludedCount = filters.exclude_genres?.length || 0;
@@ -493,7 +489,7 @@ export default function SurpriseView({
               Full Synopsis
             </span>
             <p className="text-xs font-serif-jp leading-relaxed text-[var(--text-color)]/90 select-text">
-              {getCleanSynopsis(mangaItem.synopsis)}
+              {cleanSynopsis(mangaItem.synopsis)}
             </p>
           </div>
         </div>
@@ -636,7 +632,7 @@ export default function SurpriseView({
 
               {/* Italic Synopsis Excerpt */}
               <p className="font-serif-jp text-[var(--text-muted)] italic text-xs leading-relaxed line-clamp-2 sm:line-clamp-3">
-                "{getCleanSynopsis(mangaItem.synopsis)}"
+                "{cleanSynopsis(mangaItem.synopsis)}"
               </p>
 
               {/* Full-Width Action Button */}
