@@ -130,7 +130,9 @@ async def get_featured_manga(response: Response, limit: int = 6, db: AsyncSessio
             chapters=m.chapters,
             volumes=m.volumes,
             average_score=m.average_score,
-            similarity_score=0.95,
+            # A curated "featured" row has no query and therefore no similarity.
+            # This was a hardcoded 0.95, shown as a "95% match".
+            similarity_score=None,
             llm_reasoning=None,
             is_nsfw=m.is_nsfw,
             category_badge=badge

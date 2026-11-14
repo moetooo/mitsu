@@ -139,8 +139,11 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
             if target_manga:
                 top_candidates.append({
                     "manga": target_manga,
-                    "similarity_score": 0.96,
-                    "hybrid_score": 0.96,
+                    # The seed is the title the user typed, so there is no
+                    # query-to-title similarity to report. It used to be a
+                    # hardcoded 0.96, which rendered as a fabricated "96% match".
+                    "similarity_score": None,
+                    "hybrid_score": None,
                     "format_type": getattr(target_manga, "format_type", None)
                 })
         

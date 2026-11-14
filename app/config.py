@@ -75,6 +75,39 @@ class Settings(BaseSettings):
     # invalidated before, so a re-embedded row served stale neighbours forever.
     SIMILAR_EDGES_MAX_AGE_DAYS: int = int(os.getenv("SIMILAR_EDGES_MAX_AGE_DAYS", "30"))
 
+    # --- Title shortcut ("/recommend" deciding the query names one title) ---
+    # The shortcut is what makes a misspelled title search work (the semantic
+    # fallback recovers only 2 of 8 misspellings we measured) and what made 10 of
+    # 12 thematic searches return one obscure title instead of a genre list.
+    #
+    # TITLE_MATCH_MAX_WORD_SIM is the one rule here that is *structural* rather
+    # than tuned: a query whose every word appears verbatim inside a title is not
+    # a misspelling, it is a phrase that happens to occur in a title ("cooking"
+    # in "Hot-to-Go Bakery: Cooking the Dead", word_similarity = 1.000). Measured
+    # over 8 misspellings, the highest word_similarity is 0.933, so the veto
+    # costs nothing and does not drift as the catalogue grows.
+    #
+    # The other two are tuned and may need revisiting if titles get much longer
+    # or shorter on average. TITLE_MATCH_MIN_SIM is the original 0.40 (the
+    # misspelling set spans 0.429-0.824); the coverage bounds reject a short
+    # fragment of a long title, e.g. "sports underdog team" -> "Underdog" (0.36).
+    TITLE_MATCH_MIN_SIM: float = float(os.getenv("TITLE_MATCH_MIN_SIM", "0.40"))
+    TITLE_MATCH_MAX_WORD_SIM: float = float(os.getenv("TITLE_MATCH_MAX_WORD_SIM", "0.995"))
+    TITLE_MATCH_MIN_COVERAGE: float = float(os.getenv("TITLE_MATCH_MIN_COVERAGE", "0.5"))
+    TITLE_MATCH_MAX_COVERAGE: float = float(os.getenv("TITLE_MATCH_MAX_COVERAGE", "2.0"))
+
+    # --- Roulette sampling ---
+    # A draw is taken from this many short id ranges spread across the catalogue
+    # instead of one contiguous block. A contiguous block is one ingest batch:
+    # measured, 76% of a draw carried a MangaDex id against a 14% catalogue
+    # baseline, and every draw came from a single ingest day.
+    ROULETTE_SAMPLE_BLOCKS: int = int(os.getenv("ROULETTE_SAMPLE_BLOCKS", "8"))
+    # How many ids each range spans, as a multiple of the draw size. The ranges
+    # are scanned with index range scans, so cost follows this number and the
+    # block count rather than the table size -- unlike ORDER BY random(), which
+    # degrades as the catalogue grows.
+    ROULETTE_SAMPLE_OVERSCAN: int = int(os.getenv("ROULETTE_SAMPLE_OVERSCAN", "4"))
+
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
 settings = Settings()

@@ -200,6 +200,48 @@ def compute_pool_limit(offset: int, limit: int) -> int:
     return min(pool, max(settings.HNSW_EF_SEARCH, settings.HNSW_MAX_POOL_LIMIT))
 
 
+def is_confident_title_match(query: str, title: Optional[str], sim: float, word_sim: float) -> Tuple[bool, str]:
+    """Should a fuzzy trigram hit be treated as "the user typed this title"?
+
+    Returns (accepted, reason_if_rejected) so callers and tests can say why.
+
+    The old rule was `match_score >= 0.48 or sim >= 0.40 or word_sim >= 0.65`.
+    The `word_sim >= 0.65` arm is the problem: `word_similarity` is 1.000
+    whenever one query word occurs in the title, so "cooking", "survival" and
+    "detective" all resolved to a single title. Measured: 10 of 12 thematic
+    queries took the title branch.
+
+    A verbatim word fragment is therefore rejected. A misspelling cannot appear
+    verbatim in a title -- over 8 measured misspellings the highest
+    word_similarity is 0.933 -- so this veto costs no typo tolerance. It is also
+    the only rule here that does not need re-tuning as the catalogue grows.
+    """
+    if not query or not title:
+        return False, "no-title"
+
+    q = query.strip().lower()
+    t = title.strip().lower()
+    if not q or not t:
+        return False, "no-title"
+
+    # The user typed the title exactly; the exact-match query already caught that
+    # case, so reaching here with identical text means a different row collided.
+    if q == t:
+        return True, ""
+
+    if word_sim >= settings.TITLE_MATCH_MAX_WORD_SIM:
+        return False, "verbatim-fragment"
+
+    if sim < settings.TITLE_MATCH_MIN_SIM:
+        return False, "similarity"
+
+    coverage = len(q) / len(t)
+    if not (settings.TITLE_MATCH_MIN_COVERAGE <= coverage <= settings.TITLE_MATCH_MAX_COVERAGE):
+        return False, "coverage"
+
+    return True, ""
+
+
 def similar_edges_are_fresh(manga: Any, max_age_days: Optional[int] = None) -> bool:
     """Is this row's precomputed `similar_mangas` list still usable?
 
@@ -443,16 +485,16 @@ async def find_matched_title(
         WHERE (:q <% title_english OR :q <% title_romaji OR title_english % :q OR title_romaji % :q)
           AND embedding IS NOT NULL
         ORDER BY match_score DESC
-        LIMIT 1;
+        LIMIT 5;
     """), {'q': clean_q})
-    row = res.fetchone()
-    if row:
-        mid, t_en, t_ro, emb, pop, sim, w_sim, score = row
-        if score >= 0.48 or sim >= 0.40 or w_sim >= 0.65:
-            try:
-                return mid, t_en or t_ro, emb, float(score)
-            except Exception:
-                pass
+
+    # A few candidates rather than one: the best-scoring hit may be a verbatim
+    # word fragment (a theme, not a title) while the second is the real title.
+    for mid, t_en, t_ro, emb, pop, sim, w_sim, score in res.fetchall():
+        name = t_en or t_ro
+        accepted, _reason = is_confident_title_match(clean_q, name, float(sim), float(w_sim))
+        if accepted:
+            return mid, name, emb, float(score)
 
     return None
 
@@ -727,26 +769,71 @@ async def retrieve_similar_manga(
 # PRODUCTION DIVERSITY & NON-ORDER-BY-RANDOM SAMPLING
 # =========================================================
 
+# Trailing markers that distinguish a volume/season entry from the series itself.
+_VOLUME_MARKER = re.compile(
+    r"\s*[\u2013\u2014-]?\s*(?:vol(?:ume)?\.?|book|part|season|season\s+\d+|"
+    r"chapter|ch\.|#)\s*\d+\s*$",
+    re.IGNORECASE,
+)
+
+
+def franchise_key(title: Optional[str], row_id: Any = None) -> str:
+    """A normalized key used to keep one series from filling a whole page.
+
+    This replaces `title.lower()[:15]`. The blind 15-character cut merged
+    genuinely different series -- "Berserk" with "Berserk of Gluttony" -- and in
+    this catalogue 81 different Gundam titles share one 15-character prefix, as
+    do 79 villainess titles.
+
+    The key is deliberately conservative: the whole normalized title, with a
+    trailing volume/season/chapter marker removed. Two differently-named entries
+    are therefore never merged, which is the failure mode that loses titles from
+    a page. Merging a sequel into its parent is a nice-to-have and needs a real
+    series identifier, not a title heuristic.
+    """
+    if not title or not str(title).strip():
+        return f"id:{row_id}"
+
+    text_value = str(title).strip().lower()
+    # Unify the separators that catalogues use interchangeably.
+    text_value = re.sub(r"[_/\\|~]", ":", text_value)
+    text_value = re.sub(r"\s+", " ", text_value)
+    # Drop a trailing volume/season marker, then any now-trailing punctuation.
+    text_value = _VOLUME_MARKER.sub("", text_value)
+    text_value = text_value.strip(" -\u2013\u2014:.,")
+    return text_value or f"id:{row_id}"
+
+
 def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target: int = 50) -> List[Dict[str, Any]]:
-    """Applies lightweight rule-based diversity (genres, format, score bands, hidden gems)"""
+    """Applies lightweight rule-based diversity (genres, format, score bands, hidden gems)
+
+    `exclude_ids` is honoured absolutely. It used to be undone: when every row was
+    excluded the function restored the full unfiltered list, so marking a title as
+    already-seen had no effect at exactly the moment it mattered. Relaxing the
+    seen set is a product decision and belongs to the caller, which already does
+    it explicitly for Discovery Roulette.
+    """
     if not rows:
         return []
 
-    # 1. Deduplicate seen IDs & Franchise series titles
+    # 1. Drop already-seen rows, then collapse repeats of the same series.
     seen_titles: Set[str] = set()
     filtered_rows = []
 
     for r in rows:
         if r.id in exclude_ids:
             continue
-        stem = (r.title_english or r.title_romaji or str(r.id)).lower().strip()[:15]
+        stem = franchise_key(r.title_english or r.title_romaji or r.title_native, r.id)
         if stem in seen_titles:
             continue
         seen_titles.add(stem)
         filtered_rows.append(r)
 
     if not filtered_rows:
-        filtered_rows = rows  # Fallback to full set if over-filtered
+        # Nothing survived: either every candidate was already seen, or the page is
+        # a single series. Returning the unfiltered rows here is what made
+        # `exclude_ids` a no-op; the caller decides whether to relax it.
+        return []
 
     # 2. Separate into High Confidence vs. Hidden Gems
     high_confidence = []
@@ -836,7 +923,21 @@ async def sample_candidates_from_db(
     filters: Optional[RecommendFilters] = None,
     sample_limit: int = 150
 ) -> List[Any]:
-    """Efficient SQL sampling using MOD hash & pseudo-random offsets without ORDER BY RANDOM()"""
+    """Sample candidates from across the whole catalogue, cheaply.
+
+    Ids follow ingestion order, so one contiguous block of them is one ingest
+    batch, and therefore one source. Measured: 76% of a draw carried a MangaDex
+    id against a 14% catalogue baseline, and every draw came from a single ingest
+    day. The year spread did not change -- this catalogue is 99.8% 2000+ -- so
+    source, not era, is what the block was skewing.
+
+    This takes one short range from each of several evenly spaced slices of the
+    id space instead. Each range is an index range scan, so the work is set by
+    `ROULETTE_SAMPLE_BLOCKS` and the per-block width -- not by the table size.
+    `ORDER BY random()` was the obvious alternative and was rejected: its cost
+    grows with the catalogue and it would silently become the slowest query here
+    as the table grows.
+    """
     where_clauses = ["cover_image_url IS NOT NULL"]
 
     allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
@@ -848,7 +949,6 @@ async def sample_candidates_from_db(
     params: Dict[str, Any] = {
         "limit": sample_limit,
         "seed": rand_seed,
-        "rand_frac": random.random(),
     }
 
     apply_filter_criteria(filters, where_clauses, params)
@@ -860,16 +960,35 @@ async def sample_candidates_from_db(
           synopsis, genres, tags, status, start_year, chapters, volumes,
           average_score, popularity, cover_image_url, banner_image, site_url"""
 
-    # Random PK slice instead of sorting every row with hashtext().
+    bounds = (await session.execute(text(
+        "SELECT COALESCE(MIN(id), 0) AS lo, COALESCE(MAX(id), 0) AS hi FROM manga"
+    ))).one()
+    lo, hi = int(bounds.lo), int(bounds.hi)
+
+    blocks = max(1, settings.ROULETTE_SAMPLE_BLOCKS)
+    span = max(1, (sample_limit * max(1, settings.ROULETTE_SAMPLE_OVERSCAN)) // blocks)
+
+    # One random start per slice, so a draw spans the catalogue instead of an era.
+    slot = max(1, (hi - lo + 1) // blocks)
+    starts = []
+    for i in range(blocks):
+        slot_lo = lo + i * slot
+        start = slot_lo + random.randint(0, max(0, slot - span))
+        starts.append(min(start, hi))
+
+    params["starts"] = starts
+    params["span"] = span
+
+    # ORDER BY hashtext() sorts only the sampled ranges (blocks * span rows), so it
+    # picks a random subset of them without sorting the table.
     sql = text(f"""
-        WITH bounds AS (
-          SELECT COALESCE(MIN(id), 0) AS lo, COALESCE(MAX(id), 0) AS hi FROM manga
-        )
+        WITH starts AS (SELECT unnest(CAST(:starts AS bigint[])) AS s)
         SELECT {columns}
-        FROM manga, bounds
-        WHERE id >= bounds.lo + FLOOR((bounds.hi - bounds.lo) * :rand_frac)::bigint
+        FROM manga, starts
+        WHERE manga.id >= starts.s
+          AND manga.id < starts.s + :span
           AND {where_str}
-        ORDER BY id ASC
+        ORDER BY hashtext(manga.id::text || :seed) DESC
         LIMIT :limit;
     """)
 
@@ -877,6 +996,8 @@ async def sample_candidates_from_db(
     rows = list(result.all())
 
     if len(rows) < max(1, sample_limit // 4):
+        # Selective filters can miss every sampled range. Only now pay for the
+        # whole-table hash ordering, which is what the old path always did.
         fb = text(f"""
             SELECT {columns}
             FROM manga
