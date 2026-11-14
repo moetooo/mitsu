@@ -8,6 +8,8 @@ const SurpriseView = lazy(() => import('./components/SurpriseView'));
 import HeroBanner from './components/HeroBanner';
 import BackToTop from './components/BackToTop';
 import { API_ROUTES } from './config';
+import { readJSON, writeJSON } from './utils/storage';
+import { toggleBookmark, toStoredBookmarks } from './utils/bookmarks';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
 const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
@@ -100,13 +102,12 @@ export default function App() {
   const MAX_SEEN_IDS = 200;
   const seenRouletteIdsRef = useRef([]);
 
+  // FE-18: guarded read. A corrupted value yields the defaults instead of a throw.
   const [settings, setSettings] = useState(() => {
-    try {
-      const saved = localStorage.getItem('mitsu_settings') || localStorage.getItem('mangamind_settings');
-      return saved ? { ...INITIAL_SETTINGS, ...JSON.parse(saved) } : INITIAL_SETTINGS;
-    } catch {
-      return INITIAL_SETTINGS;
-    }
+    const saved = readJSON(['mitsu_settings', 'mangamind_settings'], null);
+    return saved && typeof saved === 'object' && !Array.isArray(saved)
+      ? { ...INITIAL_SETTINGS, ...saved }
+      : INITIAL_SETTINGS;
   });
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -122,15 +123,11 @@ export default function App() {
   // changes, and keeps it when the same set just grows by a page.
   const [searchResultKey, setSearchResultKey] = useState('');
 
-  // LocalStorage Bookmarks state
+  // Saved titles. Capped and projected on the way in as well as on the way out,
+  // so a hand-edited or legacy blob cannot load 2,000 entries (FE-18).
   const [bookmarks, setBookmarks] = useState(() => {
-    try {
-      const saved = localStorage.getItem('mitsu_bookmarks') || localStorage.getItem('mangamind_bookmarks');
-      const parsed = saved ? JSON.parse(saved) : [];
-      return Array.isArray(parsed) ? parsed : [];
-    } catch {
-      return [];
-    }
+    const saved = readJSON(['mitsu_bookmarks', 'mangamind_bookmarks'], []);
+    return Array.isArray(saved) ? toStoredBookmarks(saved) : [];
   });
 
   // Trending Section Divided State & Filters
@@ -421,11 +418,11 @@ export default function App() {
     document.documentElement.setAttribute('data-theme', settings?.theme || 'sumi');
     document.documentElement.setAttribute('data-title-font', settings?.fontStyle || 'serif');
     document.documentElement.setAttribute('data-accent', settings?.accent || settings?.hoverAccent || 'vermillion');
-    if (settings) localStorage.setItem('mitsu_settings', JSON.stringify(settings));
+    if (settings) writeJSON('mitsu_settings', settings);
   }, [settings]);
 
   useEffect(() => {
-    if (Array.isArray(bookmarks)) localStorage.setItem('mitsu_bookmarks', JSON.stringify(bookmarks));
+    if (Array.isArray(bookmarks)) writeJSON('mitsu_bookmarks', toStoredBookmarks(bookmarks));
   }, [bookmarks]);
 
   const hasActiveFilters =
@@ -453,15 +450,9 @@ export default function App() {
     filters.format_type ? 1 : 0
   ].reduce((a, b) => a + b, 0);
 
+  // FE-18: add/remove, project and cap in one place (utils/bookmarks.js).
   const handleToggleBookmark = (mangaToToggle) => {
-    setBookmarks(prev => {
-      const exists = prev.some(b => b.id === mangaToToggle.id);
-      if (exists) {
-        return prev.filter(b => b.id !== mangaToToggle.id);
-      } else {
-        return [...prev, mangaToToggle];
-      }
-    });
+    setBookmarks(prev => toggleBookmark(prev, mangaToToggle));
   };
 
   const handleSearch = async (e, customQuery = null, pageNum = 1, customFilters = null) => {

@@ -1,17 +1,16 @@
 import { useState, useEffect, useRef } from 'react';
+import { readJSON, writeJSON, removeKey } from '../utils/storage';
 
 const RECENT_QUERIES_KEY = 'mitsu_recent_queries';
 const MAX_RECENT = 5;
 const RECENT_LIST_ID = 'searchbar-recent-queries';
 const recentOptionId = (index) => `searchbar-recent-option-${index}`;
 
+// FE-18: reads and writes go through the guarded storage helper, so a full quota
+// no longer throws inside a click handler.
 function getRecentQueries() {
-  try {
-    const raw = localStorage.getItem(RECENT_QUERIES_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  const saved = readJSON(RECENT_QUERIES_KEY, []);
+  return Array.isArray(saved) ? saved.filter(item => typeof item === 'string') : [];
 }
 
 function saveRecentQuery(query) {
@@ -19,12 +18,12 @@ function saveRecentQuery(query) {
   const trimmed = query.trim();
   const existing = getRecentQueries().filter(q => q.toLowerCase() !== trimmed.toLowerCase());
   const updated = [trimmed, ...existing].slice(0, MAX_RECENT);
-  localStorage.setItem(RECENT_QUERIES_KEY, JSON.stringify(updated));
+  writeJSON(RECENT_QUERIES_KEY, updated);
 }
 
 function removeRecentQuery(queryToRemove) {
   const updated = getRecentQueries().filter(q => q !== queryToRemove);
-  localStorage.setItem(RECENT_QUERIES_KEY, JSON.stringify(updated));
+  writeJSON(RECENT_QUERIES_KEY, updated);
 }
 
 export default function SearchBar({ 
@@ -123,7 +122,7 @@ export default function SearchBar({
 
   const handleClearAllRecent = (e) => {
     e.stopPropagation();
-    localStorage.removeItem(RECENT_QUERIES_KEY);
+    removeKey(RECENT_QUERIES_KEY);
     setRecentQueries([]);
     setShowRecent(false);
   };
