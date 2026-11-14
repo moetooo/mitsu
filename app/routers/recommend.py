@@ -27,7 +27,17 @@ async def roulette(request: RouletteRequest, db: AsyncSession = Depends(get_db))
         session_id=request.session_id
     )
     if not results:
-        results = await retrieve_roulette_manga(db, filters=None, seen_ids=None, pool_limit=1)
+        # Keep the caller's filters and seen set on the fallback. Dropping them
+        # leaked NSFW titles past the safety predicate and could repeat the card
+        # just shown; the retriever relaxes the seen set itself only when every
+        # candidate has been seen.
+        results = await retrieve_roulette_manga(
+            db,
+            filters=request.filters,
+            seen_ids=request.seen_ids,
+            pool_limit=1,
+            session_id=request.session_id,
+        )
     
     item = results[0] if results else {}
     return RecommendationResult(
@@ -47,7 +57,8 @@ async def roulette(request: RouletteRequest, db: AsyncSession = Depends(get_db))
         average_score=item.get("average_score"),
         similarity_score=item.get("similarity_score", 0.88),
         llm_reasoning="Discovery Roulette candidate.",
-        format_type=item.get("format_type")
+        format_type=item.get("format_type"),
+        is_nsfw=item.get("is_nsfw"),
     )
 
 @router.post("/roulette/batch", response_model=List[RecommendationResult])
@@ -80,7 +91,8 @@ async def roulette_batch(request: RouletteRequest, db: AsyncSession = Depends(ge
             average_score=item.get("average_score"),
             similarity_score=item.get("similarity_score", 0.88),
             llm_reasoning="Discovery Roulette candidate.",
-            format_type=item.get("format_type")
+            format_type=item.get("format_type"),
+            is_nsfw=item.get("is_nsfw"),
         ))
     return out
 
@@ -108,6 +120,9 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         query_embedding_ms = 0.0
         
         t0 = time.time()
+        # Bound before the pagination branch: page >= 2 never loads the target, so
+        # the optional argument below used to raise UnboundLocalError.
+        target_manga = None
         top_candidates = []
         if request.page == 1:
             res = await db.execute(select(Manga).options(defer(Manga.embedding)).where(Manga.id == mid))
@@ -128,15 +143,20 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
                 session=db,
                 query_embedding=target_emb,
                 filters=request.filters,
-                limit=needed_limit + 5,
+                # One extra row answers has_more without a second query.
+                limit=needed_limit + 1,
                 offset=target_offset,
+                # The seed title is fetched by id above; excluding it here keeps
+                # the page boundary exact instead of consuming a spare row.
+                exclude_id=mid,
                 query_inferred_tags=getattr(target_manga, "inferred_tags", None) if target_manga else None
             )
             for c in similar_candidates:
-                if c["manga"].id != mid:
-                    top_candidates.append(c)
-                if len(top_candidates) >= request.limit:
+                top_candidates.append(c)
+                if len(top_candidates) > request.limit:
                     break
+        has_more = len(top_candidates) > request.limit
+        top_candidates = top_candidates[:request.limit]
         retrieval_ms = (time.time() - t0) * 1000
     else:
         # Standard semantic / thematic search
@@ -150,10 +170,12 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
             session=db,
             query_embedding=query_embedding,
             filters=request.filters,
-            limit=request.limit,
+            limit=request.limit + 1,
             offset=offset,
             query_text=request.query
         )
+        has_more = len(top_candidates) > request.limit
+        top_candidates = top_candidates[:request.limit]
         retrieval_ms = (time.time() - t0) * 1000
         corrected_query = request.query
 
@@ -196,7 +218,8 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
             similarity_score=c["similarity_score"],
             llm_reasoning=reasoning_map.get(m.id),
             format_type=getattr(m, "format_type", None) or c.get("format_type"),
-            inferred_tags=getattr(m, "inferred_tags", None)
+            inferred_tags=getattr(m, "inferred_tags", None),
+            is_nsfw=getattr(m, "is_nsfw", None),
         ))
         
     response = RecommendResponse(
@@ -204,7 +227,9 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         corrected_query=corrected_query,
         query_embedding_ms=query_embedding_ms,
         retrieval_ms=retrieval_ms,
-        llm_ms=llm_ms
+        llm_ms=llm_ms,
+        total_duration_ms=(time.time() - start_time) * 1000,
+        has_more=has_more,
     )
     
     # 6. Cache and Return

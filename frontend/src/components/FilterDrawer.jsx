@@ -311,8 +311,6 @@ function DualRangeSliderPanel({ title, minVal, maxVal, absoluteMin, absoluteMax,
 }
 
 export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onReset }) {
-  if (!isOpen) return null;
-
   const [activeCategoryTab, setActiveCategoryTab] = useState('all');
   const [tagQuery, setTagQuery] = useState('');
 
@@ -349,6 +347,10 @@ export default function FilterDrawer({ filters, setFilters, isOpen, onClose, onR
       return { ...prev, status: next };
     });
   };
+
+  // The early return has to come after every hook. Returning before
+  // useState/useMemo broke the rules of hooks and crashed the Explore tab.
+  if (!isOpen) return null;
 
   return (
     <div className="bg-[var(--surface-color)] border border-[var(--border-color)] text-[var(--text-color)] rounded-2xl p-4 md:p-5 space-y-3.5 shadow-xl animate-in slide-in-from-top duration-200">

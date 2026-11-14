@@ -142,8 +142,13 @@ export default function MangaDetailModal({
   }, [onClose]);
 
   useEffect(() => {
-    if (!manga) {
+    // `/manga/{id}/similar` keys on the local database PK. A live provider row
+    // (a trending title the catalog has not ingested) has no local id, so there
+    // is nothing to look up -- sending an AniList id returned the wrong manga
+    // or a 404.
+    if (!manga || !Number.isInteger(manga.id)) {
       setSimilar([]);
+      setLoadingSimilar(false);
       return;
     }
     
