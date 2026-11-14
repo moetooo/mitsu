@@ -25,17 +25,19 @@ from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional
 
-from sqlalchemy import func, or_, select, text as sa_text
+from sqlalchemy import select, text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import defer
 
-from ..db_models import Manga
+from ..db_models import Manga, SEARCH_BLOB
 from ..models import RecommendFilters
 from .retrieval import retrieve_similar_manga, similar_edges_are_fresh
 from .safety import row_is_nsfw, safety_filter
 
-#: `/search` is a jump-to-title box, not a results page. Stage 7 owns pagination.
+#: `/search` is a jump-to-title box. Stage 7 added `limit`/`offset` (API-08);
+#: the router bounds `limit` to `SEARCH_MAX_LIMIT` so the ceiling is one number.
 SEARCH_RESULT_LIMIT = 10
+SEARCH_MAX_LIMIT = 50
 
 
 class MangaNotFound(LookupError):
@@ -134,33 +136,55 @@ async def get_title_card(session: AsyncSession, manga_id: int) -> Optional[Dict[
     }
 
 
+def build_search_statement(
+    term: str,
+    *,
+    limit: int = SEARCH_RESULT_LIMIT,
+    offset: int = 0,
+):
+    """The `/search` statement, with no database attached.
+
+    Split out so the shape can be tested without a catalog (`tests/test_search_index.py`),
+    the same way `trending.build_query` is.
+    """
+    return (
+        select(Manga)
+        .options(defer(Manga.embedding))
+        .where(
+            SEARCH_BLOB.like(like_pattern(term.lower()), escape="\\"),
+            sa_text(safety_filter()),
+        )
+        .order_by(Manga.popularity.desc().nullslast(), Manga.id)
+        .offset(offset)
+        .limit(limit)
+    )
+
+
 async def search_titles(
     session: AsyncSession,
     term: str,
     *,
     limit: int = SEARCH_RESULT_LIMIT,
+    offset: int = 0,
 ) -> List[Manga]:
-    """Titles whose names or alternative titles contain `term`.
+    """Titles whose names or alternative titles contain `term`, one page at a time.
+
+    Three things changed in Stage 7 (API-08):
+
+    * **One indexed predicate.** The old statement ORed four `ILIKE`s, one of
+      them over `array_to_string(alternative_titles, ' ')`, which no index can
+      serve -- so every keystroke scanned all 95,626 rows (**270-390 ms warm**).
+      It now matches `SEARCH_BLOB`, the exact expression behind
+      `idx_manga_search_blob_trgm` (**3-14 ms** measured, bitmap index scan).
+    * **A page, not ten rows.** `limit`/`offset` are bounded at the router.
+    * **A total order.** `popularity DESC` alone is not a total order: rows that
+      tie can be returned in either order, so consecutive pages could repeat or
+      skip one. `id` breaks the tie, which is what makes `offset` paging stable.
 
     Public endpoint, so it applies the shared safety predicate rather than
     trusting a caller to pass `nsfw=False`.
     """
-    pattern = like_pattern(term)
-    stmt = (
-        select(Manga)
-        .options(defer(Manga.embedding))
-        .where(
-            or_(
-                Manga.title_english.ilike(pattern, escape="\\"),
-                Manga.title_romaji.ilike(pattern, escape="\\"),
-                Manga.title_native.ilike(pattern, escape="\\"),
-                func.array_to_string(Manga.alternative_titles, " ").ilike(pattern, escape="\\"),
-            ),
-            sa_text(safety_filter()),
-        )
-        .order_by(Manga.popularity.desc().nullslast())
-        .limit(limit)
-    )
+    stmt = build_search_statement(term, limit=limit, offset=offset)
     return list((await session.execute(stmt)).scalars().all())
 
 

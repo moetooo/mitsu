@@ -115,6 +115,9 @@ async def get_session_seen(session_id: str) -> Set[int]:
 _CATALOG_CACHE_PATTERNS = (
     "recommend:*",
     "search:*",
+    # The spelling vocabulary is derived from the catalog too (ARCH-14): it used
+    # to be a process global that no sync could refresh.
+    "catalog:vocab:*",
     "manga:featured_mix:*",
     "manga:trending:*",
     "manga:detail:*",

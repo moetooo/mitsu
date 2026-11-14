@@ -111,22 +111,34 @@ async def roulette_batch(request: RouletteRequest, db: AsyncSession = Depends(ge
         ))
     return out
 
-@router.post("/recommend", response_model=RecommendResponse)
-async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db)):
-    start_time = time.time()
-    
-    # Sanitize query and filter payload
-    request.query = sanitize_search_query(request.query)
-    request.filters = sanitize_recommend_filters(request.filters)
-    request.query = await autocorrect_query(request.query, db)
-    
-    # 1. Check Cache
-    cache_key = generate_cache_key("recommend", request.model_dump())
-    cached_response = await get_cached(cache_key)
-    if cached_response:
-        return cached_response
-        
-    # 2. A query that is *exactly* a title is an unambiguous intent, so it keeps
+
+class _Answer:
+    """What one query produced: rows, the effective query, and the timings."""
+
+    __slots__ = (
+        "top_candidates", "corrected_query", "title_suggestion",
+        "query_embedding_ms", "retrieval_ms", "has_more",
+    )
+
+    def __init__(self, top_candidates, corrected_query, title_suggestion,
+                 query_embedding_ms, retrieval_ms, has_more):
+        self.top_candidates = top_candidates
+        self.corrected_query = corrected_query
+        self.title_suggestion = title_suggestion
+        self.query_embedding_ms = query_embedding_ms
+        self.retrieval_ms = retrieval_ms
+        self.has_more = has_more
+
+
+async def _answer_query(db: AsyncSession, request: RecommendRequest) -> _Answer:
+    """Answer one query: exact-title neighbourhood, or a thematic search.
+
+    Kept separate from the handler because the handler may run it **twice**: the
+    prompt is answered as typed first, and only when that finds nothing is the
+    spelling corrected (SVC-05). Rewriting a query that works is what used to
+    make a search for a character name return something else entirely.
+    """
+    # A query that is *exactly* a title is an unambiguous intent, so it keeps
     # the old fast path: resolve the title, then serve things similar to it.
     #
     # Anything else -- including a close-but-not-exact title -- now runs the
@@ -202,6 +214,8 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         has_more = len(top_candidates) > request.limit
         top_candidates = top_candidates[:request.limit]
         retrieval_ms = (time.time() - t0) * 1000
+        return _Answer(top_candidates, corrected_query, title_suggestion,
+                       query_embedding_ms, retrieval_ms, has_more)
     else:
         # Standard semantic / thematic search
         t0 = time.time()
@@ -221,7 +235,65 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         has_more = len(top_candidates) > request.limit
         top_candidates = top_candidates[:request.limit]
         retrieval_ms = (time.time() - t0) * 1000
-        corrected_query = request.query
+        return _Answer(top_candidates, request.query, title_suggestion,
+                   query_embedding_ms, retrieval_ms, has_more)
+
+
+async def _answer_with_fallback(db: AsyncSession, request: RecommendRequest) -> _Answer:
+    """Answer as typed; ask about spelling only when the answer is empty.
+
+    This is SVC-05's fix, extracted so the rule can be tested without a catalog,
+    an embedding model or an LLM. The old order corrected **first**, which meant
+    every request paid a database read and a vocabulary scan, and a query the
+    user could read (`romance between rivals` -> `romance between rival`) was
+    silently searched as something else.
+    """
+    answer = await _answer_query(db, request)
+    if answer.top_candidates or not request.query or request.page != 1:
+        return answer
+
+    typed_query = request.query
+    corrected = await autocorrect_query(typed_query, db)
+    if corrected == typed_query:
+        return answer
+
+    request.query = corrected
+    retry = await _answer_query(db, request)
+    if retry.top_candidates:
+        return retry
+
+    request.query = typed_query
+    return answer
+
+
+@router.post("/recommend", response_model=RecommendResponse)
+async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db)):
+    start_time = time.time()
+
+    # Sanitize query and filter payload. Note what is *not* here: the spelling
+    # correction. It used to run before the cache lookup, so every request paid a
+    # database read and a vocabulary scan (SVC-05), and it rewrote queries that
+    # worked. It now runs only when the answer is empty, below.
+    request.query = sanitize_search_query(request.query)
+    request.filters = sanitize_recommend_filters(request.filters)
+
+    # 1. Check Cache
+    cache_key = generate_cache_key("recommend", request.model_dump())
+    cached_response = await get_cached(cache_key)
+    if cached_response:
+        return cached_response
+
+    # 2. Answer the query as typed, falling back to a spelling correction only if
+    #    nothing matched (SVC-05). `autocorrect_query` returns its input unchanged
+    #    when it has no confident candidate, so an unknown word is never replaced.
+    answer = await _answer_with_fallback(db, request)
+
+    top_candidates = answer.top_candidates
+    corrected_query = answer.corrected_query
+    title_suggestion = answer.title_suggestion
+    query_embedding_ms = answer.query_embedding_ms
+    retrieval_ms = answer.retrieval_ms
+    has_more = answer.has_more
 
     # If no matching candidates (e.g. gibberish or zero-relevance query), skip LLM and return empty
     if not top_candidates:
@@ -238,12 +310,12 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         await set_cached(cache_key, response.model_dump(), ttl=1800)
         return response
 
-    # 3. LLM Reasoning
+    # 4. LLM Reasoning
     t0 = time.time()
     reasoning_map = await generate_reasoning(corrected_query, top_candidates)
     llm_ms = (time.time() - t0) * 1000
     
-    # 4. Format Response
+    # 5. Format Response
     results = []
     for c in top_candidates:
         m = c["manga"]
@@ -278,6 +350,6 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         title_suggestion=title_suggestion,
     )
     
-    # 6. Cache and Return
+    # 6. Cache and return
     await set_cached(cache_key, response.model_dump())
     return response

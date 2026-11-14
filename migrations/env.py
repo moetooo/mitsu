@@ -30,6 +30,22 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+#: Indexes autogenerate cannot compare, because PostgreSQL normalises their
+#: expressions. `idx_manga_search_blob_trgm` is declared as
+#: `lower(coalesce(title_english, '') || ...)` and reflected back as
+#: `lower(COALESCE(title_english, ''::text) || ...)`, so `alembic check` reports a
+#: change to an index that is in fact identical. The index is still created by
+#: migration 0006; `tests/test_search_index.py` asserts the `/search` statement
+#: actually uses it, which is the property that matters.
+UNCOMPARABLE_INDEXES = {"idx_manga_search_blob_trgm"}
+
+
+def _include_object(object_, name, type_, reflected, compare_to):
+    if type_ == "index" and name in UNCOMPARABLE_INDEXES:
+        return False
+    return True
+
+
 def _database_url() -> str:
     override = os.getenv("ALEMBIC_DATABASE_URL")
     if override:
@@ -46,6 +62,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -56,6 +73,7 @@ def _do_run_migrations(connection) -> None:
         connection=connection,
         target_metadata=target_metadata,
         compare_type=True,
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()

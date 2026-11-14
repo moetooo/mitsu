@@ -71,6 +71,22 @@ def test_genre_predicate_comes_from_the_shared_builder():
     assert "Yaoi" not in compiled, "the alias must be a bind value, not SQL text"
 
 
+def test_trending_does_not_filter_by_year():
+    """API-19: recency was expressed as a WHERE clause and hid half the catalogue.
+
+    `start_year >= 2020 OR status = RELEASING` kept only 36.6% of rows (34,977 of
+    95,661) and removed 7 of the all-time top 10 -- Chainsaw Man, Solo Leveling,
+    Jujutsu Kaisen, Attack on Titan, Tokyo Ghoul, Demon Slayer, Oyasumi Punpun --
+    because they started before 2020. If freshness should matter it belongs in the
+    ORDER BY as a weight, where it reorders rows instead of deleting them.
+    """
+    stmt, _params, _used = trending.build_query("all", None)
+    # The column list of a whole-row select mentions `start_year` either way; the
+    # predicate is the thing under test.
+    predicate = str(stmt.whereclause)
+    assert "start_year" not in predicate, predicate
+
+
 def test_unknown_format_reports_that_it_could_not_filter():
     """An unrecognised format must not silently look like a working filter."""
     _stmt, _params, used = trending.build_query("not-a-real-format", None)

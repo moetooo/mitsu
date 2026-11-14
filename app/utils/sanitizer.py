@@ -1,16 +1,35 @@
+"""Input normalisation for user-supplied text -- **not** a security boundary (API-18).
+
+Every SQL fragment in this codebase is built with bound parameters since Stages
+6A/6B (`services/catalog.py`, `services/query_filters.py`), and the `LIKE`
+metacharacters are escaped at the pattern (`catalog.escape_like`). A query string is
+never spliced into a statement, so deleting SQL-looking substrings here protected
+nothing -- and it removed text that is part of real titles.
+
+Measured on the live catalogue before the removal: of the 76 titles containing
+`;`, `--`, or the words `drop`/`delete`/`truncate`, **73 were altered before the
+search ever saw them** (`Occultic;Nine` -> `OcculticNine`, `STEINS;GATE DROPS` ->
+`STEINSGATE DROPS`), and a query of exactly `Drop` became the empty string, so the
+endpoint answered nothing at all.
+
+What remains is what a search box genuinely needs: a length cap (a 100 KB query is
+a cheap denial of service) and removal of control characters/NUL bytes.
+"""
+
 import re
 from typing import List, Optional, Any
 from ..models import RecommendFilters
 
 # Matches non-printable control characters and NULL bytes
 CONTROL_CHARS_RE = re.compile(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]')
-# Matches SQL comment injection attempts and statement separators
-SQL_INJECTION_RE = re.compile(r'(--|/\*|\*/|;|exec\s+|\bdrop\b|\bdelete\b|\btruncate\b)', re.IGNORECASE)
+
 
 def sanitize_search_query(query: Optional[str], max_length: int = 300) -> str:
     """
-    Sanitizes search query input strings against SQL/Vector injection, ReDoS vectors,
-    and invalid control characters.
+    Normalises a search query: length cap plus control-character removal.
+
+    It deliberately does **not** try to detect SQL. That is the job of bound
+    parameters, and a text filter can only produce false positives (API-18).
     """
     if not query:
         return ""
@@ -20,9 +39,6 @@ def sanitize_search_query(query: Optional[str], max_length: int = 300) -> str:
 
     # 2. Strip NULL bytes and non-printable control characters
     cleaned = CONTROL_CHARS_RE.sub('', cleaned)
-
-    # 3. Sanitize potential SQL injection comment/statement breakout markers
-    cleaned = SQL_INJECTION_RE.sub('', cleaned)
 
     return cleaned.strip()
 

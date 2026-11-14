@@ -1,4 +1,6 @@
 import pytest
+from sqlalchemy import text
+
 from app.db import AsyncSessionLocal
 from app.models import RecommendFilters
 from app.services.embedding import generate_embedding
@@ -14,14 +16,27 @@ def sample_embedding():
 # -------------------------------------------------------------
 # 1. Search Query Sanitizer & Autocorrect Tests
 # -------------------------------------------------------------
-def test_search_query_sanitizer():
-    """Sanitizer must strip SQL injection comment markers and statement breakouts."""
-    dirty_query = "   Naruto'; DROP TABLE manga; -- comment   "
-    clean = sanitize_search_query(dirty_query)
-    assert "--" not in clean
-    assert ";" not in clean
-    assert "DROP" not in clean
-    assert "Naruto" in clean
+def test_search_query_sanitizer_keeps_text_that_looks_like_sql():
+    """API-18: the sanitizer is normalisation, not SQL detection.
+
+    It used to delete `;`, `--` and the *words* `drop`/`delete`/`truncate`. On the
+    live catalogue that altered 73 of the 76 titles carrying those markers and
+    turned a query of exactly `Drop` into the empty string. Nothing is spliced
+    into SQL any more -- every statement binds -- so the deletion protected
+    nothing and only damaged real titles.
+    """
+    for title in ("Occultic;Nine", "STEINS;GATE DROPS", "Kaguya-sama -- Love is War"):
+        assert sanitize_search_query(title) == title
+
+    assert sanitize_search_query("   Drop   ") == "Drop"
+
+
+def test_search_query_sanitizer_still_caps_length_and_control_characters():
+    """What is left must still hold: a bounded query with no control characters."""
+    assert sanitize_search_query("x" * 1_000) == "x" * 300
+    assert sanitize_search_query("Naruto" + chr(0) + chr(7)) == "Naruto"
+    assert sanitize_search_query("   ") == ""
+    assert sanitize_search_query(None) == ""
 
 @pytest.mark.asyncio
 @pytest.mark.requires_catalog
@@ -179,3 +194,22 @@ async def test_search_filter_multi_combination():
             assert "horror" not in genres_lower, f"'{title}' has Horror"
             assert "horror" not in tag_names, f"'{title}' has Horror tag"
             assert m.average_score >= 75, f"'{title}' score {m.average_score} < 75"
+
+
+@pytest.mark.asyncio
+@pytest.mark.requires_catalog
+async def test_sql_shaped_query_is_harmless_now_that_it_is_not_rewritten():
+    """API-18, end to end: the text survives sanitising and is still only a value.
+
+    The strap line matters: `search_titles` binds the term, so the payload reaches
+    PostgreSQL as a parameter and matches nothing. `Occultic;Nine` is a real
+    catalogue title the old filter used to corrupt (`OcculticNine`).
+    """
+    from app.services import catalog
+
+    async with AsyncSessionLocal() as db:
+        assert await catalog.search_titles(db, "'; DROP TABLE manga; --", limit=5) == []
+        assert await catalog.search_titles(db, "Occultic;Nine", limit=5)
+        # The table the payload names is still there, with its rows.
+        surviving = await db.scalar(text("SELECT count(*) FROM manga"))
+        assert surviving > 0
