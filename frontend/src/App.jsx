@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, lazy, Suspense } from 'react';
+import { useState, useEffect, useRef, useMemo, lazy, Suspense } from 'react';
 import Header from './components/Header';
 import SearchBar from './components/SearchBar';
 import MangaGrid from './components/MangaGrid';
@@ -10,6 +10,7 @@ import BackToTop from './components/BackToTop';
 import { API_ROUTES } from './config';
 import { readJSON, writeJSON } from './utils/storage';
 import { normalizeSettings, clampLimit } from './utils/settings';
+import { loadVocabulary, FALLBACK_GROUPS, FALLBACK_FORMATS } from './utils/vocabulary';
 import { toggleBookmark, toStoredBookmarks } from './utils/bookmarks';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
@@ -102,6 +103,36 @@ export default function App() {
   };
   // FE-22, belt and braces: what the request bodies use, clamped at the call site.
   const requestLimit = clampLimit(settings.limit);
+
+  // FE-23: genres, themes and formats come from the served vocabulary. The frozen
+  // fallback is what the drawer renders before the request lands (or if it fails),
+  // so there is one client source and no fourth hand-copied list.
+  const [vocabulary, setVocabulary] = useState({
+    groups: FALLBACK_GROUPS,
+    formats: FALLBACK_FORMATS
+  });
+  useEffect(() => {
+    let alive = true;
+    loadVocabulary().then(next => {
+      if (alive) setVocabulary(next);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const trendingFormatOptions = useMemo(
+    () => [
+      { id: 'all', label: 'All Formats' },
+      ...vocabulary.formats.map(format => ({ id: format.slug, label: format.label }))
+    ],
+    [vocabulary.formats]
+  );
+
+  const trendingGenreOptions = useMemo(() => {
+    const genres = vocabulary.groups.find(group => group.id === 'genre');
+    return ['all', ...(genres ? genres.options : [])];
+  }, [vocabulary.groups]);
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
@@ -583,6 +614,7 @@ export default function App() {
                 <FilterDrawer
                   filters={filters}
                   setFilters={setFilters}
+                  categories={vocabulary.groups}
                   isOpen={isFilterOpen}
                   onClose={() => setIsFilterOpen(false)}
                   onReset={() => setFilters(INITIAL_FILTERS)}
@@ -684,12 +716,7 @@ export default function App() {
                 aria-label="Trending format"
                 className="inline-flex max-w-full items-center gap-1 bg-[var(--surface-color)]/80 backdrop-blur-md border border-[var(--border-color)] p-1 rounded-full overflow-x-auto no-scrollbar shadow-xs self-start"
               >
-                {[
-                  { id: 'all', label: 'All Formats' },
-                  { id: 'manga', label: 'Manga', tag: 'JP' },
-                  { id: 'manhwa', label: 'Manhwa', tag: 'KR' },
-                  { id: 'manhua', label: 'Manhua', tag: 'CN' }
-                ].map(sub => (
+                {trendingFormatOptions.map(sub => (
                   <button
                     key={sub.id}
                     type="button"
@@ -724,12 +751,7 @@ export default function App() {
                 <span className="text-[10px] font-mono text-[var(--text-muted)] uppercase tracking-wider shrink-0 mr-1">
                   Genre:
                 </span>
-                {[
-                  "all", "Romance", "Boys' Love", "Yaoi", "Girls' Love", "Yuri", 
-                  "Action", "Adventure", "Comedy", "Drama", "Fantasy", 
-                  "Horror", "Mystery", "Psychological", "Sci-Fi", "Slice of Life", 
-                  "Supernatural", "Thriller", "Isekai", "Sports", "Ecchi"
-                ].map(g => (
+                {trendingGenreOptions.map(g => (
                   <button
                     key={g}
                     type="button"
