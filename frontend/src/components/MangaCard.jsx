@@ -270,17 +270,5 @@ function MangaCard({
 }
 
 // Feature 73: Component Memoization to prevent re-rendering cards unless card props change
-export default memo(MangaCard, (prevProps, nextProps) => {
-  return (
-    prevProps.manga.id === nextProps.manga.id &&
-    prevProps.isBookmarked === nextProps.isBookmarked &&
-    prevProps.nsfwBlur === nextProps.nsfwBlur &&
-    prevProps.gridSize === nextProps.gridSize &&
-    prevProps.hoverAccent === nextProps.hoverAccent &&
-    prevProps.rank === nextProps.rank &&
-    prevProps.showMatchPct === nextProps.showMatchPct &&
-    prevProps.manga.similarity_score === nextProps.manga.similarity_score &&
-    prevProps.manga.inferred_tags === nextProps.manga.inferred_tags
-  );
-});
+export default memo(MangaCard);
 

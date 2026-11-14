@@ -120,7 +120,10 @@ export default function App() {
   const [trendingPage, setTrendingPage] = useState(1);
   const [trendingMangas, setTrendingMangas] = useState([]);
   const [loadingTrending, setLoadingTrending] = useState(false);
-  const [hasMoreTrending, setHasMoreTrending] = useState(true);
+  // Starts false: the sentinel only exists once page 1 has said there is more.
+  // It used to start true, so the observer could ask for page 2 while page 1 was
+  // still in flight and spend an AniList request nobody needed.
+  const [hasMoreTrending, setHasMoreTrending] = useState(false);
 
   const [sessionId, setSessionId] = useState(newSessionId);
   const sessionIdRef = useRef(sessionId);
@@ -134,6 +137,9 @@ export default function App() {
   const requestRef = useRef({ search: 0, trending: 0, surprise: 0 });
   const abortRef = useRef({ search: null, trending: null, surprise: null });
   const surpriseInFlightRef = useRef(null);
+  // One in-flight load-more per feed. The sentinel and the virtualized list's
+  // row callback can both fire, and neither should spend a second request.
+  const loadMoreInFlightRef = useRef({ search: false, trending: false });
   // Set when the roulette answers 404: nothing matches the current filters.
   const [surpriseExhausted, setSurpriseExhausted] = useState(false);
 
@@ -340,11 +346,17 @@ export default function App() {
   }, [activeTab, trendingFormat, trendingGenre]);
 
   const handleLoadMoreTrending = async () => {
+    if (loadMoreInFlightRef.current.trending) return;
+    loadMoreInFlightRef.current.trending = true;
     const nextPage = trendingPage + 1;
     // The counter only moves once the page actually arrived. Advancing it first
     // meant one failed request permanently skipped a page nobody ever saw.
-    const ok = await fetchTrendingData(nextPage, true);
-    if (ok) setTrendingPage(nextPage);
+    try {
+      const ok = await fetchTrendingData(nextPage, true);
+      if (ok) setTrendingPage(nextPage);
+    } finally {
+      loadMoreInFlightRef.current.trending = false;
+    }
   };
 
   useEffect(() => {
@@ -448,9 +460,15 @@ export default function App() {
   // Debounced auto-search on typing has been removed.
 
   const handleLoadMore = async () => {
+    if (loadMoreInFlightRef.current.search) return;
+    loadMoreInFlightRef.current.search = true;
     const nextPage = page + 1;
-    const ok = await handleSearch(null, query, nextPage, filters);
-    if (ok) setPage(nextPage);
+    try {
+      const ok = await handleSearch(null, query, nextPage, filters);
+      if (ok) setPage(nextPage);
+    } finally {
+      loadMoreInFlightRef.current.search = false;
+    }
   };
 
   const handleTagClick = (tag) => {

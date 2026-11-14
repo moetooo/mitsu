@@ -1,7 +1,66 @@
-import { useState, useEffect, useRef, useMemo } from 'react';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { List } from 'react-window';
 import MangaCard from './MangaCard';
 import SectionDivider from './SectionDivider';
+
+// Column classes never change, so they live at module scope: a fresh object here
+// would invalidate rowProps on every render.
+const GRID_COLS = {
+  compact: 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5',
+  standard: 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6',
+  large: 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-8'
+};
+
+// Declared once, outside the component. An inline row component is a fresh
+// component type on every render, so react-window unmounted and remounted every
+// visible row on each pass and the rows lost their state (cover-loaded flags,
+// hover, anything a card keeps locally).
+function VirtualRow({
+  index,
+  style,
+  items,
+  columns,
+  gridCols,
+  isBookmarked,
+  onCardClick,
+  onToggleBookmark,
+  activeGridSize,
+  stampStyle,
+  hoverAccent,
+  nsfwBlur,
+  onSelectAuthor,
+  showMatchPct,
+  showRank
+}) {
+  const start = index * columns;
+  const rowItems = items.slice(start, start + columns);
+  return (
+    <div style={{ ...style, display: 'flex', alignItems: 'flex-start' }} className="pb-6">
+      <div className={`w-full grid ${gridCols}`}>
+        {rowItems.map((m, colIdx) => {
+          const globalIdx = start + colIdx;
+          return (
+            <div key={m.id || globalIdx} className="relative transform-gpu will-change-transform h-full">
+              <MangaCard
+                manga={m}
+                onClick={onCardClick}
+                isBookmarked={isBookmarked(m.id)}
+                onToggleBookmark={onToggleBookmark}
+                gridSize={activeGridSize}
+                stampStyle={stampStyle}
+                hoverAccent={hoverAccent}
+                nsfwBlur={nsfwBlur}
+                onSelectAuthor={onSelectAuthor}
+                showMatchPct={showMatchPct}
+                rank={showRank ? (globalIdx + 1) : null}
+              />
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 export default function MangaGrid({
   mangas = [],
@@ -23,14 +82,16 @@ export default function MangaGrid({
   infiniteScroll = true
 }) {
   const [sortBy, setSortBy] = useState('best_match');
-  const isBookmarked = (id) => bookmarks.some(b => b.id === id);
+  const booksRef = useRef(bookmarks);
+  booksRef.current = bookmarks;
+  // Stable identity: an inline predicate here would invalidate rowProps on every
+  // render and re-render every mounted row for nothing.
+  const isBookmarked = useCallback(
+    (id) => (booksRef.current || []).some(b => b.id === id),
+    []
+  );
 
   const activeGridSize = gridSize || 'standard';
-  const gridColsMap = {
-    compact: 'grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3.5',
-    standard: 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6',
-    large: 'grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-8'
-  };
 
   // Feature 16: Sort mangas dynamically (Memoized to prevent sorting on unrelated renders)
   const sortedMangas = useMemo(() => {
@@ -46,13 +107,15 @@ export default function MangaGrid({
   // Feature 74: Responsive Viewport Virtualization State
   const gridRef = useRef(null);
   const [columns, setColumns] = useState(4);
+  // The virtualized list scrolls itself, so it needs a real height. It used to be
+  // a full 100vh; leaving room above and below keeps the page usable.
   const [viewportHeight, setViewportHeight] = useState(800);
 
   // Dynamic Column Count Calculation based on viewport width & grid density
   useEffect(() => {
     const updateDimensions = () => {
       const w = window.innerWidth;
-      setViewportHeight(window.innerHeight);
+      setViewportHeight(Math.max(480, window.innerHeight - 260));
 
       if (activeGridSize === 'compact') {
         if (w >= 1280) setColumns(6);
@@ -83,6 +146,23 @@ export default function MangaGrid({
   const estimatedRowHeight = activeGridSize === 'compact' ? 360 : activeGridSize === 'large' ? 520 : 450;
   const totalRows = Math.ceil(sortedMangas.length / columns);
 
+  // Feature 74: Virtualized Grid Render Container using react-window
+  const rowProps = useMemo(() => ({
+    items: sortedMangas,
+    columns,
+    gridCols: GRID_COLS[activeGridSize] || GRID_COLS.standard,
+    isBookmarked,
+    onCardClick,
+    onToggleBookmark,
+    activeGridSize,
+    stampStyle,
+    hoverAccent,
+    nsfwBlur,
+    onSelectAuthor,
+    showMatchPct,
+    showRank
+  }), [sortedMangas, columns, activeGridSize, isBookmarked, onCardClick, onToggleBookmark, stampStyle, hoverAccent, nsfwBlur, onSelectAuthor, showMatchPct, showRank]);
+
   // Feature 149: Infinite Scroll with Load-More Sentinel
   const sentinelRef = useRef(null);
   const loadingRef = useRef(loading);
@@ -108,6 +188,8 @@ export default function MangaGrid({
         }
       },
       {
+        // The list scrolls the window now, so the sentinel is judged against the
+        // viewport it is actually inside of.
         root: null,
         rootMargin: '160px 0px',
         threshold: 0.05
@@ -120,10 +202,25 @@ export default function MangaGrid({
     };
   }, [infiniteScroll, hasMore, onLoadMore]);
 
+
+  // A self-scrolling list keeps the sentinel below its own fold forever, so the
+  // load trigger has to come from the rows instead. Damped by the row count: a
+  // given size is asked about once, and only a user who is actually at the end
+  // (and therefore sees stopIndex move again) can ask again.
+  const lastRequestedRowsRef = useRef(0);
+  const requestMoreIfNearTheEnd = useCallback((visibleRows) => {
+    if (!infiniteScroll || !hasMoreRef.current || loadingRef.current) return;
+    if (!onLoadMoreRef.current) return;
+    if (visibleRows.stopIndex < totalRows - 2) return;
+    if (totalRows <= lastRequestedRowsRef.current) return;
+    lastRequestedRowsRef.current = totalRows;
+    onLoadMoreRef.current();
+  }, [infiniteScroll, totalRows]);
+
   // Feature 34: Shimmer Paper Skeleton Grid Loading State
   if (loading && mangas.length === 0) {
     return (
-      <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
+      <div className={`grid ${GRID_COLS[activeGridSize] || GRID_COLS.standard}`}>
         {[1, 2, 3, 4, 5, 6, 7, 8].map(i => (
           <div
             key={i}
@@ -145,36 +242,6 @@ export default function MangaGrid({
     );
   }
 
-  // Feature 74: Virtualized Grid Render Container using react-window
-  const Row = ({ index, style }) => {
-    const items = sortedMangas.slice(index * columns, (index + 1) * columns);
-    return (
-      <div style={{ ...style, display: 'flex', alignItems: 'flex-start' }} className="pb-6">
-        <div className={`w-full grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
-          {items.map((m, colIdx) => {
-            const globalIdx = index * columns + colIdx;
-            return (
-              <div key={m.id || globalIdx} className="relative transform-gpu will-change-transform h-full">
-                <MangaCard
-                  manga={m}
-                  onClick={onCardClick}
-                  isBookmarked={isBookmarked(m.id)}
-                  onToggleBookmark={onToggleBookmark}
-                  gridSize={activeGridSize}
-                  stampStyle={stampStyle}
-                  hoverAccent={hoverAccent}
-                  nsfwBlur={nsfwBlur}
-                  onSelectAuthor={onSelectAuthor}
-                  showMatchPct={showMatchPct}
-                  rank={showRank ? (globalIdx + 1) : null}
-                />
-              </div>
-            );
-          })}
-        </div>
-      </div>
-    );
-  };
 
   return (
     <div ref={gridRef} className="space-y-6 w-full">
@@ -225,16 +292,18 @@ export default function MangaGrid({
 
       {shouldVirtualize ? (
         <List
-          style={{ height: viewportHeight || 800, width: '100%' }}
+          style={{ height: viewportHeight, width: '100%' }}
           rowCount={totalRows}
           rowHeight={estimatedRowHeight}
-          rowComponent={Row}
+          rowComponent={VirtualRow}
+          rowProps={rowProps}
           overscanCount={2}
+          onRowsRendered={requestMoreIfNearTheEnd}
           className="no-scrollbar"
         />
       ) : (
         /* Standard Un-virtualized Grid Display for smaller item sets */
-        <div className={`grid ${gridColsMap[activeGridSize] || gridColsMap.standard}`}>
+        <div className={`grid ${GRID_COLS[activeGridSize] || GRID_COLS.standard}`}>
           {sortedMangas.map((m, idx) => (
             <div key={m.id || idx} className="relative transform-gpu will-change-transform">
               <MangaCard
@@ -258,7 +327,7 @@ export default function MangaGrid({
       {/* Feature 149: Infinite Scroll Load-More Sentinel or Manual Fallback Button */}
       {hasMore && onLoadMore && (
         <div className="text-center pt-6 pb-2">
-          {infiniteScroll ? (
+          {infiniteScroll && !shouldVirtualize ? (
             <div
               ref={sentinelRef}
               onClick={() => {
