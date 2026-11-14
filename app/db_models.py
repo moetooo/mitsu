@@ -1,7 +1,7 @@
 from typing import Any
 from sqlalchemy import (
     BigInteger, Boolean, Column, Date, DateTime, Float, ForeignKey, ForeignKeyConstraint,
-    Index, Integer, JSON, String, Text, UniqueConstraint, text,
+    Index, Integer, JSON, String, Text, UniqueConstraint, func, text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from pgvector.sqlalchemy import Vector
@@ -174,6 +174,41 @@ class SyncRun(Base):
     details = Column(JSONB, nullable=False, server_default=text("'{}'::jsonb"))
     error = Column(Text, nullable=True)
 
+#: Everything `/search` matches against, as one string.
+#:
+#: The endpoint used to OR four predicates: `title_english ILIKE … OR
+#: title_romaji ILIKE … OR title_native ILIKE … OR
+#: array_to_string(alternative_titles, ' ') ILIKE …`. An OR across four
+#: expressions cannot use an index unless *every* branch is indexed, and the
+#: `array_to_string` branch never could be, so the planner fell back to a
+#: sequential scan over every row: measured **270-390 ms warm** on the 95,626-row
+#: catalogue. One expression over the same text, indexed once, answers the same
+#: question in **3-37 ms** (`Bitmap Index Scan on idx_manga_search_blob_trgm`).
+#:
+#: Why `mitsu_alt_titles_text` instead of `array_to_string` directly: PostgreSQL
+#: marks `array_to_string(anyarray, text)` **STABLE**, because element output
+#: functions may be stable, and an index expression must be IMMUTABLE. For a
+#: `text[]` the conversion has no time or locale dependency, so migration 0006
+#: defines an IMMUTABLE wrapper over it (this is the standard pg_trgm answer for
+#: exactly this case).
+#: The separators and empty-string defaults are inlined, not bound. A bound
+#: parameter in the expression (`|| $1 ||`) does not match the index expression
+#: (`|| ' ' ||`) and the planner would ignore the index. `text()` rather than
+#: `literal_column()` because a bare `ColumnClause` has no table, and SQLAlchemy
+#: then refuses to attach the functional index to `manga` at all.
+_SPACE = text("' '")
+_EMPTY = text("''")
+
+SEARCH_BLOB = func.lower(
+    func.coalesce(Manga.title_english, _EMPTY)
+    + _SPACE
+    + func.coalesce(Manga.title_romaji, _EMPTY)
+    + _SPACE
+    + func.coalesce(Manga.title_native, _EMPTY)
+    + _SPACE
+    + func.coalesce(func.mitsu_alt_titles_text(Manga.alternative_titles), _EMPTY)
+)
+
 # Indexes are defined in the schema script or alembic, but we can also define them here:
 Index('idx_manga_genres', Manga.genres, postgresql_using='gin')
 Index('idx_manga_tags', Manga.tags, postgresql_using='gin')
@@ -185,6 +220,14 @@ Index('idx_manga_start_year', Manga.start_year)
 Index('idx_manga_title_english_trgm', Manga.title_english, postgresql_using='gin', postgresql_ops={'title_english': 'gin_trgm_ops'})
 Index('idx_manga_title_romaji_trgm', Manga.title_romaji, postgresql_using='gin', postgresql_ops={'title_romaji': 'gin_trgm_ops'})
 Index('idx_manga_title_native_trgm', Manga.title_native, postgresql_using='gin', postgresql_ops={'title_native': 'gin_trgm_ops'})
+# What `/search` actually matches on (API-08). Keyed by the expression's label so
+# SQLAlchemy emits the `gin_trgm_ops` opclass for a functional index.
+Index(
+    'idx_manga_search_blob_trgm',
+    SEARCH_BLOB.label('search_blob'),
+    postgresql_using='gin',
+    postgresql_ops={'search_blob': 'gin_trgm_ops'},
+)
 Index(
     'idx_manga_embedding_hnsw',
     Manga.embedding,

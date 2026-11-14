@@ -1,8 +1,9 @@
 """Test configuration.
 
 Tests never touch the developer database. Before `app.config` is imported,
-`DATABASE_URL` is redirected to a dedicated test database: the schema is created
-from the ORM metadata once per session and every test starts from empty tables.
+`DATABASE_URL` is redirected to a dedicated test database: the schema is built
+once per session by running the real migrations (`alembic upgrade head`), and
+every test starts from empty tables.
 
 Tests that need a populated catalog are marked `requires_catalog`; they skip when
 the test database is empty instead of asserting against whatever happens to be

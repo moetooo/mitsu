@@ -57,6 +57,10 @@ REQUIRED_TABLES = (
 REQUIRED_INDEXES = (
     "idx_manga_embedding_hnsw",
     "idx_manga_external_ids_manga",
+    # `/search` is one statement over this expression (migration 0006). Without
+    # the index it is a 95,000-row sequential scan on every keystroke, so a
+    # database that has not run `alembic upgrade head` fails fast instead.
+    "idx_manga_search_blob_trgm",
 )
 
 
