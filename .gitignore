@@ -14,6 +14,8 @@ node_modules/
 frontend/node_modules/
 frontend/dist/
 frontend/dist-ssr/
+# Dashboard build output: `npm run build:dashboard` emits here (vite.dashboard.config.js).
+app/static/dashboard/
 *.log
 npm-debug.log*
 yarn-debug.log*
@@ -44,13 +46,11 @@ Thumbs.db
 query_db.py
 scratch/
 
-# Local utility & test scripts
+# Local utility scripts
 preflight.py
 add_column.py
 partition_manga.py
 precompute_similarities.py
-tests/
-pytest.ini
 temp_*.py
 check_*.py
 scripts/

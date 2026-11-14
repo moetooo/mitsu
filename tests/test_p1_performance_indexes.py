@@ -1,0 +1,41 @@
+import os, sys
+import pytest
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from app.db_models import Manga, RecommendationsEdge, DiscoveryQueue
+from app.services.retrieval import build_genre_sql_condition
+from scripts.migrate_p1_indexes import MIGRATION_STATEMENTS
+
+EXPECTED = {"idx_manga_status_year","idx_manga_score_popularity","idx_manga_year_score","idx_manga_chapters","idx_manga_updated_at","idx_manga_cover_notnull","idx_reco_edges_to","idx_reco_edges_votes","idx_discovery_queue_pending","idx_discovery_queue_external"}
+
+def test_models_define_p1_indexes():
+    names = {i.name for t in (Manga.__table__, RecommendationsEdge.__table__, DiscoveryQueue.__table__) for i in t.indexes}
+    assert EXPECTED.issubset(names), EXPECTED - names
+
+def test_partial_cover_index():
+    idx = {i.name: i for i in Manga.__table__.indexes}["idx_manga_cover_notnull"]
+    assert "cover_image_url IS NOT NULL" in str(idx.dialect_options["postgresql"]["where"])
+
+def test_migration_covers_all():
+    j = " ".join(s for _, s in MIGRATION_STATEMENTS)
+    for n in EXPECTED:
+        assert n in j
+
+def test_genre_params():
+    p = {}
+    c = build_genre_sql_condition(["Action"], params=p)
+    assert "genre_0_arr" in c and "genre_0_tag" in c and "Action" not in c
+    assert p["genre_0_arr"] == ["Action"]
+
+def test_genre_inline_escape():
+    c = build_genre_sql_condition(["Boys' Love"], exclude=True)
+    assert c.startswith("NOT (") and "Boys'' Love" in c
+
+def test_ann_ordering():
+    import inspect, app.services.retrieval as r
+    s = inspect.getsource(r.retrieve_similar_manga)
+    assert "ORDER BY embedding <=> CAST(:emb AS vector)" in s and "pool_limit" in s
+
+def test_no_per_request_set():
+    import inspect, app.services.retrieval as r
+    s = inspect.getsource(r)
+    assert "SET pg_trgm" not in s and "set_config('pg_trgm" in s
