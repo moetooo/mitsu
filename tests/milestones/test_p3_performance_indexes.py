@@ -6,13 +6,13 @@ import os
 import sys
 import pytest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from app.db_models import Manga
 from pathlib import Path
 
 SEARCH_INDEXES_REVISION = (
-    Path(__file__).resolve().parent.parent / "migrations" / "versions" / "0003_search_indexes.py"
+    Path(__file__).resolve().parent.parent.parent / "migrations" / "versions" / "0003_search_indexes.py"
 )
 
 

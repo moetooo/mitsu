@@ -16,8 +16,8 @@
 
 ## 🛠️ Tech Stack
 
-- **Backend**: FastAPI (Python 3.11), PostgreSQL 16 + `pgvector`, Redis 7, SentenceTransformers (`all-MiniLM-L6-v2`)
-- **Frontend**: React 18, Vite, TailwindCSS
+- **Backend**: FastAPI (Python 3.13), PostgreSQL 16 + `pgvector`, Redis 7, `fastembed` serving `sentence-transformers/all-MiniLM-L6-v2` (384-d)
+- **Frontend**: React 19, Vite, TailwindCSS
 - **Typography**: `Shippori Mincho`, `Zen Kaku Gothic New`, `Inter`
 
 ---
@@ -75,19 +75,49 @@ There is no default account: leave either one unset and the whole admin surface
 answers 503, so a fresh deployment cannot be entered with a well-known password.
 Scheduled auto sync starts **off**; enable it with the switch when you are ready.
 
-The dashboard is a separate React/Vite entry. A production build is checked into
-`app/static/dashboard/`; after editing `frontend/src/dashboard/`, rebuild it:
+The dashboard is a separate React/Vite entry. Its build output is gitignored, so a
+fresh checkout must build it once before `/admin/dashboard` serves the Vite app
+(otherwise the legacy fallback page is served):
 
 ```bash
 cd frontend
 npm run build:dashboard
 ```
 
+It is written to `app/static/dashboard/` and mounted at `/admin/dashboard-assets`.
+
 For live dashboard work, `npm run dev:dashboard` serves the entry at
 <http://localhost:5174/dashboard.html> and proxies `/admin` to the API.
 
 Full setup, API trigger, Windows Task Scheduler, and cron details are in
 [`docs/catalog-sync.md`](docs/catalog-sync.md).
+
+---
+
+## 🧪 Tests
+
+Two suites, both must pass before a change lands.
+
+```bash
+# Backend: creates its own test database with `alembic upgrade head` and never
+# touches the database in .env (see tests/conftest.py). Coverage is part of the
+# run; the floor is in .coveragerc.
+venv/Scripts/python.exe -m pytest -q
+venv/Scripts/python.exe -m alembic check      # schema drift
+
+# A single file or directory still reports coverage but cannot meet the floor,
+# so add --no-cov when you are not running the whole suite:
+venv/Scripts/python.exe -m pytest -q tests/test_search_filters.py --no-cov
+
+# Frontend: Vitest + Testing Library + jsdom
+cd frontend && npm test && npm run lint && npm run build
+```
+
+Tests that need a populated catalog are marked `requires_catalog` and skip on the
+empty test database; point `MITSU_TEST_DATABASE_URL` at a disposable copy of a
+real catalog to run them. The campaign records of past migration campaigns live
+in `tests/milestones/` and assert on project artifacts rather than application
+behaviour, so they are not regression protection (see `ARCHITECTURE.md` §7).
 
 ---
 

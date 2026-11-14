@@ -4,18 +4,23 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 import sys
-sys.path.append(os.path.join(os.path.dirname(__file__), "..", "scratch"))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", "..", "scratch"))
 
-try:
-    from verify_pilot_500 import (
-        parse_verifier_response,
-        evaluate_decision,
-        call_verifier_api,
-        verify_db_safety_before,
-        verify_db_safety_after
-    )
-except ImportError:
-    pass
+pytestmark = pytest.mark.requires_artifacts
+
+# scratch/ is not tracked, so the verification script is a local artifact: skip
+# with a reason instead of swallowing the ImportError and failing with NameError.
+verify_pilot_500 = pytest.importorskip(
+    "verify_pilot_500",
+    reason="scratch/verify_pilot_500.py is a local artifact and is not tracked",
+)
+from verify_pilot_500 import (  # noqa: E402
+    parse_verifier_response,
+    evaluate_decision,
+    call_verifier_api,
+    verify_db_safety_before,
+    verify_db_safety_after,
+)
 
 def test_valid_verifier_json():
     raw = '{"decision": "AUTO_ACCEPT", "confidence": 0.95, "evidence_quote": "They fell in love", "reason": "Clear", "definition_match": true, "original_evidence_supported": true}'
@@ -83,13 +88,19 @@ def test_api_failure_becomes_verification_error(mock_make_api_call):
     res = call_verifier_api("some_key", "prompt", cache)
     assert res is None 
 
-@pytest.mark.asyncio
-@patch('verify_pilot_500.get_db_counts')
-async def test_database_remains_unchanged(mock_get_db_counts):
-    mock_get_db_counts.return_value = (95255, 0)
-    with patch('verify_pilot_500.verify_db_safety_before') as mock_before:
-        mock_before.return_value = (95255, 0)
-        count1, count2 = await mock_before()
-        assert count1 == 95255
-        assert count2 == 0
-        verify_db_safety_after(count1, count2, 95255, 0)
+def test_db_safety_check_accepts_unchanged_counts():
+    """The safety check is silent when the two snapshots agree (QA-12)."""
+    verify_db_safety_after(95255, 120, 95255, 120)
+
+
+def test_db_safety_check_rejects_a_changed_row_count():
+    """A row added or removed between snapshots must raise, not pass quietly."""
+    with pytest.raises(AssertionError, match="manga count changed"):
+        verify_db_safety_after(95255, 120, 95256, 120)
+
+
+def test_db_safety_check_rejects_a_changed_inferred_tag_count():
+    """A verified record whose inferred_tags appeared/disappeared must raise."""
+    with pytest.raises(AssertionError, match="inferred_tags count changed"):
+        verify_db_safety_after(95255, 120, 95255, 121)
+

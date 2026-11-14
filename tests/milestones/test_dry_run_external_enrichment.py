@@ -5,7 +5,9 @@ import csv
 import asyncio
 from sqlalchemy import text
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+pytestmark = pytest.mark.requires_artifacts
 
 from app.db import AsyncSessionLocal
 from app.enrichment.vocabulary import CANONICAL_VOCABULARY

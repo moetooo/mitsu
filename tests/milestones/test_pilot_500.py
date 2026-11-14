@@ -5,10 +5,13 @@ Tests for Phase 6 500-Title Pilot infrastructure and dataset sampling.
 import pytest
 import os
 import json
+from pathlib import Path
 
 # The sampling script lives in the gitignored scripts/ directory, so both the
 # script and the artifact it produces are optional: skip explicitly instead of
 # swallowing the ImportError and asserting against an empty list.
+pytestmark = pytest.mark.requires_artifacts
+
 sample_pilot = pytest.importorskip(
     "scripts.sample_pilot_500",
     reason="scripts/ is not tracked; the pilot sampler is a local artifact",
@@ -18,7 +21,7 @@ STRATA_DEFINITIONS = sample_pilot.STRATA_DEFINITIONS
 
 def test_pilot_500_ids_file_exists_and_valid():
     """Verify scratch/pilot_500_ids.json exists, contains 500 unique IDs, and has strata breakdown."""
-    filepath = os.path.join("scratch", "pilot_500_ids.json")
+    filepath = os.path.join(str(Path(__file__).resolve().parents[2]), "scratch", "pilot_500_ids.json")
     if not os.path.exists(filepath):
         pytest.skip(f"{filepath} is a local pilot artifact and is not tracked")
 

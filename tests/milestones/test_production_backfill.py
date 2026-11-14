@@ -19,7 +19,9 @@ import pytest
 import csv
 from unittest.mock import patch, MagicMock, AsyncMock
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
+
+pytestmark = pytest.mark.requires_artifacts
 
 from app.enrichment.models import InferredTag, merge_inferred_tags
 from app.enrichment.vocabulary import CANONICAL_VOCABULARY, get_tag_by_slug

@@ -4,7 +4,7 @@ import sys
 import asyncio
 from sqlalchemy import text
 
-sys.path.append(os.path.join(os.path.dirname(__file__), ".."))
+sys.path.append(os.path.join(os.path.dirname(__file__), "..", ".."))
 from app.db import AsyncSessionLocal
 from app.enrichment.vocabulary import CANONICAL_VOCABULARY, get_tag_by_slug
 from app.enrichment.synonyms import normalize_tag_input, resolve_canonical_tag, RAW_ALIAS_DEFINITIONS

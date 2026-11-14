@@ -175,6 +175,18 @@ def catalog_available() -> bool:
     return asyncio.run(run()) > 0
 
 
+@lru_cache(maxsize=1)
+def artifacts_available() -> bool:
+    """True when the untracked campaign artifacts (scratch/, scripts/) exist.
+
+    `tests/milestones/` records one migration campaign. Its evidence lives in
+    `scratch/` and `scripts/`, both gitignored, so a clean checkout must skip
+    those tests with a reason rather than fail on a missing import.
+    """
+    root = Path(__file__).resolve().parent.parent
+    return (root / "scratch").is_dir() and (root / "scripts").is_dir()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def test_database() -> str:
     _bootstrap_database()
@@ -186,6 +198,11 @@ def pytest_runtest_setup(item):
         pytest.skip(
             "requires a populated catalog; set MITSU_TEST_DATABASE_URL to a "
             "prepared test database to run this test"
+        )
+    if "requires_artifacts" in item.keywords and not artifacts_available():
+        pytest.skip(
+            "requires the local campaign artifacts in scratch/ and scripts/, "
+            "which are not tracked"
         )
 
 
