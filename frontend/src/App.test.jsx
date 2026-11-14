@@ -37,3 +37,21 @@ describe('App tab and filter semantics (FE-30)', () => {
     expect(within(genreGroup).getByRole('button', { name: '#Romance' })).toHaveAttribute('aria-pressed', 'false');
   });
 });
+
+describe('App tab switching (FE-24)', () => {
+  it('does not remount the tab container when the tab changes', async () => {
+    const { container } = render(<App />);
+    const before = container.querySelector('.animate-tab-fade-in');
+    expect(before).toBeTruthy();
+
+    const nav = screen.getByRole('navigation', { name: 'Primary' });
+    fireEvent.click(within(nav).getByRole('button', { name: /trending/i }));
+    await act(async () => {});
+    fireEvent.click(within(nav).getByRole('button', { name: /explore/i }));
+    await act(async () => {});
+
+    // Same DOM node: `key={activeTab}` used to rebuild it here, which reset any
+    // state living inside a tab (the discovery queue used to be one of those).
+    expect(container.querySelector('.animate-tab-fade-in')).toBe(before);
+  });
+});
