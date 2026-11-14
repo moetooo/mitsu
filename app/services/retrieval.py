@@ -1070,12 +1070,29 @@ async def retrieve_roulette_manga(
     if pool_size < ROULETTE_REFILL_THRESHOLD and session_id:
         asyncio.create_task(refill_roulette_pool(filters, session_id))
 
-    # 4. Attempt popping from Redis candidate pool
+    # 4. Attempt popping from Redis candidate pool.
+    #
+    # This popped exactly `max(pool_limit, 4)` items. If all of them happened to
+    # be in the session's seen set, the loop gave up and went to the database --
+    # discarding a pool that might still hold dozens of unseen rows. The pool is
+    # drained by LPOP, so those unseen rows were simply thrown away.
+    # It now pops in bounded rounds until it has enough unseen rows, the pool is
+    # empty, or the budget is spent.
     results = []
     if pool_size > 0:
-        popped_items = await cache.pop_roulette_pool(filter_hash, count=max(pool_limit, 4))
-        # Exclude seen items
-        unseen_items = [item for item in popped_items if item["id"] not in combined_seen]
+        wanted = max(pool_limit, 4)
+        budget = max(wanted * 4, ROULETTE_POOL_TARGET)
+        unseen_items: List[dict] = []
+        popped_total = 0
+        while len(unseen_items) < pool_limit and popped_total < budget:
+            round_size = min(wanted, budget - popped_total)
+            popped_items = await cache.pop_roulette_pool(filter_hash, count=round_size)
+            if not popped_items:
+                break
+            popped_total += len(popped_items)
+            unseen_items.extend(
+                item for item in popped_items if item["id"] not in combined_seen
+            )
         if unseen_items:
             random.shuffle(unseen_items)
             results = unseen_items[:pool_limit]
@@ -1084,8 +1101,16 @@ async def retrieve_roulette_manga(
     if not results:
         db_rows = await sample_candidates_from_db(session, filters=filters, sample_limit=80)
         results = apply_diversity_filtering(db_rows, exclude_ids=combined_seen, max_target=pool_limit)
+        if not results:
+            # Every row in this draw was already seen. Draw again before relaxing:
+            # the sample is 80 rows out of ~95k, so a second draw almost always
+            # contains unseen ones, whereas re-filtering the same 80 rows with an
+            # empty exclusion set can only re-serve something already shown.
+            retry_rows = await sample_candidates_from_db(session, filters=filters, sample_limit=80)
+            results = apply_diversity_filtering(retry_rows, exclude_ids=combined_seen, max_target=pool_limit)
         if not results and db_rows:
-            # Absolute fallback if all candidates were seen
+            # Absolute fallback: the catalogue really is exhausted for this
+            # session, so repeat rather than return nothing.
             results = apply_diversity_filtering(db_rows, exclude_ids=set(), max_target=pool_limit)
         if results:
             random.shuffle(results)
