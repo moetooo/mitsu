@@ -6,7 +6,7 @@ import json
 import logging
 import sys
 
-from .schema import seed_external_ids, verify_schema
+from ..core.schema import seed_external_ids, verify_schema
 from .service import run_backfill, run_sync, sync_status
 from ..config import settings
 

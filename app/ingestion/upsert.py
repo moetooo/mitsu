@@ -7,15 +7,15 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..db_models import Manga
-from ..enrichment.models import merge_inferred_tags
-from ..services.format import format_type_for_row, infer_format_type
-from ..sync.identity import (
+from ..core.identity import (
     ExternalId,
     attach_external_ids,
     extract_external_ids,
     find_match,
 )
+from ..db_models import Manga
+from ..enrichment.models import merge_inferred_tags
+from ..services.format import format_type_for_row, infer_format_type
 
 _EMBEDDING_FIELDS = (
     "title_romaji",

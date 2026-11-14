@@ -12,7 +12,7 @@ from .middleware.rate_limit import RateLimitMiddleware
 from .services.embedding import generate_embedding
 from .services.cache import redis_client
 from .db import engine, AsyncSessionLocal
-from .sync.schema import verify_schema
+from .core.schema import verify_schema
 
 logging.basicConfig(
     level=logging.INFO,

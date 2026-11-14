@@ -2,8 +2,9 @@
 
 Two invariants this module keeps:
 
-1. The MangaDex daily budget is spent through ``sync.budget.consume`` for every
-   request, so enrichment cannot outspend the sync job.
+1. The MangaDex daily budget is spent through ``core.budget.consume`` for every
+   request, so enrichment cannot outspend the sync job. (The quota lives in
+   ``app.core`` because both this module and ``app.sync`` spend from it.)
 2. No row lock is held across a network call. Rows are claimed in a short
    transaction (bumping ``enrich_attempts``), fetched with no locks held, then
    written back in a second short transaction. A crashed worker therefore
@@ -17,10 +18,10 @@ from datetime import datetime, timezone
 from sqlalchemy import select, update
 
 from ..config import settings
+from ..core.budget import BudgetExceeded, consume
 from ..db import AsyncSessionLocal
 from ..db_models import DiscoveryQueue
 from ..services.embedding import generate_embedding
-from ..sync.budget import BudgetExceeded, consume
 from .mangadex_client import fetch_detail as fetch_mangadex_detail
 from .normalize import mangadex_to_record
 from .upsert import smart_upsert_manga

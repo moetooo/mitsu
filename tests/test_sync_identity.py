@@ -4,8 +4,8 @@ from sqlalchemy import func, select, text
 from app.db import AsyncSessionLocal
 from app.db_models import Manga, MangaExternalId
 from app.ingestion.upsert import smart_upsert_manga_ex
-from app.sync.identity import normalize_external_id
-from app.sync.schema import seed_external_ids, verify_schema
+from app.core.identity import normalize_external_id
+from app.core.schema import seed_external_ids, verify_schema
 
 TEST_IDS = {
     "anilist": 9_999_9701,

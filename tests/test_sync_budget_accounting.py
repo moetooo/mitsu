@@ -20,7 +20,7 @@ from sqlalchemy import select, text
 
 from app.db import AsyncSessionLocal
 from app.db_models import Manga, SyncApiUsage
-from app.sync import budget as budget_module
+from app.core import budget as budget_module
 from app.sync import service as sync_service
 
 # This module seeds and truncates `manga`, so it only runs against the database

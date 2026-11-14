@@ -1,4 +1,8 @@
-"""Schema readiness checks and the data backfills the sync job owns.
+"""Schema readiness checks and the id backfill.
+
+Lives in `app.core` rather than `app.sync` so that `app.ingestion` (which needs
+`verify_schema()` before it writes) does not have to import the package that
+drives it (ARCH-02).
 
 Schema *changes* live in `migrations/` (Alembic) and nowhere else. This module
 used to issue `ALTER TABLE`, `create_all` and a `DROP`/`CREATE TRIGGER` pair on
@@ -19,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncConnection
 
 from ..db import engine
 
-logger = logging.getLogger("mitsu.sync.schema")
+logger = logging.getLogger("mitsu.core.schema")
 
 # Columns the sync job and the safety predicate require on `manga`.
 REQUIRED_MANGA_COLUMNS = (

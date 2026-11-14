@@ -8,10 +8,10 @@ from sqlalchemy.dialects.postgresql import insert
 from .anilist_client import fetch_page
 from .normalize import anilist_to_record
 from .upsert import smart_upsert_manga
+from ..core.schema import verify_schema
 from ..db import AsyncSessionLocal
 from ..db_models import Manga
 from ..services.embedding import generate_embedding
-from ..sync.schema import verify_schema
 
 logger = logging.getLogger("mitsu.ingestion.ingest")
 

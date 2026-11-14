@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Dict, Any, Set, Tuple
 from ..db_models import Manga
 from ..models import RecommendFilters
-from ..services import cache
+from . import cache
 from ..config import settings
 from ..enrichment.vocabulary import CANONICAL_VOCABULARY
 from .safety import safety_filter
@@ -148,9 +148,6 @@ def generate_filter_hash(filters: Optional[RecommendFilters]) -> str:
     filter_str = json.dumps(filter_dict, sort_keys=True)
     return hashlib.md5(filter_str.encode()).hexdigest()[:12]
 
-def _sql_literal(value: str) -> str:
-    return value.replace("'", "''")
-
 
 async def apply_ann_settings(session: AsyncSession, ef_search: Optional[int] = None) -> None:
     """Apply the pgvector ANN settings for the current transaction.
@@ -274,35 +271,45 @@ def similar_edges_are_fresh(manga: Any, max_age_days: Optional[int] = None) -> b
     return (now - written_at) <= timedelta(days=days)
 
 
-def _tag_json_condition(tag_name: str, key: str, params: Optional[Dict[str, Any]]) -> str:
-    """JSONB containment on tags; bound as a parameter when params is given."""
-    if params is None:
-        return "tags @> '[{\"name\": \"" + _sql_literal(tag_name) + "\"}]'"
+def _tag_json_condition(tag_name: str, key: str, params: Dict[str, Any]) -> str:
+    """JSONB containment on tags, always bound as a parameter.
+
+    There used to be a `params is None` branch here that pasted the value into
+    the SQL text and doubled its single quotes. No production caller ever took
+    that path -- every one of them passes a parameter dict -- but leaving the
+    branch in place meant the next caller could reach for it and hand a request
+    value to a string concatenation (SVC-10). The parameter is now required.
+    """
     params[key] = json.dumps([{"name": tag_name}])
     return "tags @> CAST(:" + key + " AS jsonb)"
 
 
-def _array_contains_condition(value: str, key: str, params: Optional[Dict[str, Any]]) -> str:
-    """genres @> ARRAY[...] containment; bound as a parameter when params is given."""
-    if params is None:
-        return "genres @> ARRAY['" + _sql_literal(value) + "']"
+def _array_contains_condition(value: str, key: str, params: Dict[str, Any]) -> str:
+    """`genres @> ARRAY[...]` containment, always bound as a parameter."""
     params[key] = [value]
     return "genres @> CAST(:" + key + " AS text[])"
 
 
 def build_genre_sql_condition(
     genres_list: Optional[List[str]],
+    params: Dict[str, Any],
     exclude: bool = False,
-    params: Optional[Dict[str, Any]] = None,
-    key_prefix: str = "genre",
+    key_prefix: Optional[str] = None,
 ) -> Optional[str]:
     """Builds an exhaustive SQL condition across PostgreSQL text array genres and JSONB tags.
 
-    When params is supplied, every user-provided genre is emitted as a bind
-    parameter so the statement text stays constant across requests and can be
-    planned and cached by PostgreSQL. Without params the legacy inline form is
-    produced (used by unit tests).
+    Every user-provided genre is emitted as a bind parameter, so the statement
+    text stays constant across requests and can be prepared and cached by
+    PostgreSQL. `params` is required: the old inline-literal form is gone, so
+    there is no way to reach this with an unbound request value (SVC-10).
+
+    `key_prefix` defaults from `exclude`. Include and exclude lists need
+    distinct bind names or the exclusion overwrites the inclusion in `params`
+    and the two conditions cancel out, so deriving it here means a caller
+    cannot forget.
     """
+    if key_prefix is None:
+        key_prefix = "exclude_genre" if exclude else "genre"
     if not genres_list:
         return None
 
@@ -401,16 +408,14 @@ def apply_filter_criteria(
         where_clauses.append("chapters <= :max_chapters")
 
     if filters.genres:
-        cond = build_genre_sql_condition(
-            filters.genres, exclude=False, params=params, key_prefix="genre"
-        )
+        cond = build_genre_sql_condition(filters.genres, params)
         if cond:
             where_clauses.append(cond)
 
     if filters.exclude_genres:
-        cond = build_genre_sql_condition(
-            filters.exclude_genres, exclude=True, params=params, key_prefix="exclude_genre"
-        )
+        # `key_prefix` is derived from `exclude`, so the two lists cannot
+        # overwrite each other's bind parameters.
+        cond = build_genre_sql_condition(filters.exclude_genres, params, exclude=True)
         if cond:
             where_clauses.append(cond)
 

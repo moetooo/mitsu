@@ -7,7 +7,7 @@ from sqlalchemy import func, select, update
 from ..config import settings
 from ..db import AsyncSessionLocal
 from ..db_models import SyncRun
-from .budget import db_utc_day, reset_at, usage_summary
+from ..core.budget import db_utc_day, reset_at, usage_summary
 
 # Statuses that represent a real attempt and therefore count toward the day.
 COUNTED_STATUSES = ("running", "success", "partial", "failed", "rejected")
