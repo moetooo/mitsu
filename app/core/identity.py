@@ -1,3 +1,13 @@
+"""External-id normalisation and attachment to one catalog row.
+
+Lives in `app.core` rather than `app.sync` because the ingestion upsert path
+needs it too, and `app.ingestion` must not import `app.sync` (ARCH-02).
+
+The mapping table is authoritative: an id is attached to exactly one manga and
+is never moved by this module. A collision is reported as a conflict for the
+explicit merge command to resolve.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field

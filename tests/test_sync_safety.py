@@ -7,7 +7,7 @@ from sqlalchemy import delete, func, select, text
 from app.db import AsyncSessionLocal, engine
 from app.db_models import Manga, SyncApiUsage, SyncRun
 from app.sync import service as sync_service
-from app.sync.budget import BudgetExceeded, consume, utc_day
+from app.core.budget import BudgetExceeded, consume, utc_day
 
 
 @pytest.mark.asyncio

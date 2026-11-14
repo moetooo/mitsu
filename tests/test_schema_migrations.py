@@ -23,7 +23,7 @@ from alembic.config import Config
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from app.db import engine
-from app.sync.schema import SchemaNotReady, verify_schema
+from app.core.schema import SchemaNotReady, verify_schema
 
 ROOT = Path(__file__).resolve().parent.parent
 
@@ -109,7 +109,7 @@ async def test_database_is_on_a_recorded_revision():
 @pytest.mark.asyncio
 async def test_missing_schema_names_the_fix(monkeypatch):
     """A stale database must fail with the command that fixes it, not silently."""
-    import app.sync.schema as schema
+    import app.core.schema as schema
 
     monkeypatch.setattr(
         schema, "REQUIRED_MANGA_COLUMNS", (*schema.REQUIRED_MANGA_COLUMNS, "no_such_column")

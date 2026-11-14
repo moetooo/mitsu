@@ -1,3 +1,10 @@
+"""Per-provider daily request budgets.
+
+Lives in `app.core` rather than `app.sync` because both the sync job and the
+ingestion enricher spend from the same quota, so neither package may own it
+(ARCH-02). The day is read from the database clock, never the process clock.
+"""
+
 from __future__ import annotations
 
 from datetime import date, datetime, time as dt_time, timedelta, timezone

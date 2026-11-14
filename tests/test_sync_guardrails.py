@@ -7,7 +7,7 @@ from app.config import settings
 from app.db import AsyncSessionLocal
 from app.db_models import SyncApiUsage, SyncRun
 from app.sync import guardrails
-from app.sync.budget import BudgetExceeded, consume, get_usage, usage_summary
+from app.core.budget import BudgetExceeded, consume, get_usage, usage_summary
 from app.sync.service import sync_status
 
 

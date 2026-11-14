@@ -135,10 +135,12 @@ def test_f_existing_filters_still_work():
     manhwa_sql = build_format_sql_condition(["manhwa"])
     assert manhwa_sql == "(format_type = 'MANHWA')"
 
-    # Genre SQL condition unchanged
-    genre_sql = build_genre_sql_condition(["Action"])
-    assert "genres @> ARRAY['Action']" in genre_sql
-    assert "tags @> '[{\"name\": \"Action\"}]'" in genre_sql
+    # Genre SQL condition is unchanged in shape, but every value is bound (SVC-10).
+    genre_params: dict = {}
+    genre_sql = build_genre_sql_condition(["Action"], genre_params)
+    assert "genres @> CAST(:genre_0_arr AS text[])" in genre_sql
+    assert "tags @> CAST(:genre_0_tag AS jsonb)" in genre_sql
+    assert genre_params["genre_0_arr"] == ["Action"]
 
 
 def test_g_deterministic_ranking():

@@ -23,8 +23,8 @@ from app.db import AsyncSessionLocal, engine
 from app.db_models import Manga
 from app.ingestion import ingest
 from app.sync import service as sync_service
-from app.sync.identity import ExternalId, attach_external_ids, find_match
-from app.sync.schema import verify_schema
+from app.core.identity import ExternalId, attach_external_ids, find_match
+from app.core.schema import verify_schema
 
 CHECKPOINT = datetime(2024, 5, 1, 12, 0, tzinfo=timezone.utc)
 

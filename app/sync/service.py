@@ -9,6 +9,9 @@ from sqlalchemy import delete, func, or_, select, text
 
 from ..config import settings
 from ..db import AsyncSessionLocal, engine
+from ..core.budget import BudgetExceeded, consume, usage_summary
+from ..core.identity import ExternalId, attach_external_ids, normalize_external_id
+from ..core.schema import seed_external_ids, verify_schema
 from ..db_models import Manga, SyncApiUsage, SyncRun, SyncState
 from ..ingestion.anilist_client import fetch_updated_page
 from ..ingestion.mangadex_client import fetch_detail as fetch_mangadex_detail
@@ -16,7 +19,6 @@ from ..ingestion.normalize import anilist_to_record
 from ..ingestion.upsert import smart_upsert_manga_ex
 from ..services.cache import invalidate_catalog_caches
 from ..services.embedding import generate_embedding
-from .budget import BudgetExceeded, consume, usage_summary
 from .control import auto_state, get_auto_enabled
 from .guardrails import (
     GuardrailError,
@@ -27,8 +29,6 @@ from .guardrails import (
     limits_from_usage,
     preflight_trigger,
 )
-from .identity import ExternalId, attach_external_ids, normalize_external_id
-from .schema import seed_external_ids, verify_schema
 
 logger = logging.getLogger("mitsu.sync.service")
 

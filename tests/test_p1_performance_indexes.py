@@ -34,9 +34,12 @@ def test_genre_params():
     assert "genre_0_arr" in c and "genre_0_tag" in c and "Action" not in c
     assert p["genre_0_arr"] == ["Action"]
 
-def test_genre_inline_escape():
-    c = build_genre_sql_condition(["Boys' Love"], exclude=True)
-    assert c.startswith("NOT (") and "Boys'' Love" in c
+def test_genre_exclude_is_parameterised_too():
+    """SVC-10: the exclude path is bound as well, so an apostrophe is never in SQL text."""
+    p = {}
+    c = build_genre_sql_condition(["Boys' Love"], params=p, exclude=True)
+    assert c.startswith("NOT (") and "Boys' Love" not in c
+    assert p["exclude_genre_0_arr"] == ["Boys' Love"]
 
 def test_ann_ordering():
     import inspect, app.services.retrieval as r

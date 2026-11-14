@@ -1,3 +1,4 @@
+import json
 import unittest
 from app.services.retrieval import (
     build_format_sql_condition,
@@ -111,40 +112,54 @@ class TestFilterBuilder(unittest.TestCase):
     # -------------------------------------------------------------
     def test_build_genre_sql_standard(self):
         """Standard genres must check both text array genres and JSONB tags."""
-        cond = build_genre_sql_condition(["Action"])
-        self.assertIn("genres @> ARRAY['Action']", cond)
-        self.assertIn("tags @> '[{\"name\": \"Action\"}]'", cond)
+        params: dict = {}
+        cond = build_genre_sql_condition(["Action"], params)
+        self.assertIn("genres @> CAST(:genre_0_arr AS text[])", cond)
+        self.assertIn("tags @> CAST(:genre_0_tag AS jsonb)", cond)
+        self.assertEqual(params["genre_0_arr"], ["Action"])
+        self.assertEqual(json.loads(params["genre_0_tag"]), [{"name": "Action"}])
 
     def test_build_genre_sql_yaoi_bl_aliases(self):
         """Yaoi / BL / Boys' Love aliases must expand to all related terminology."""
         for alias in ["yaoi", "bl", "boys' love"]:
-            cond = build_genre_sql_condition([alias])
-            self.assertIn("Boys'' Love", cond)
-            self.assertIn("Yaoi", cond)
+            params: dict = {}
+            cond = build_genre_sql_condition([alias], params)
+            self.assertEqual(params["genre_0_arr"], ["Boys' Love"])
+            self.assertEqual(json.loads(params["genre_0_t2"]), [{"name": "Yaoi"}])
+            self.assertNotIn("'Boys'' Love'", cond)
 
     def test_build_genre_sql_yuri_gl_aliases(self):
         """Yuri / GL / Girls' Love aliases must expand to all related terminology."""
         for alias in ["yuri", "gl", "girls' love"]:
-            cond = build_genre_sql_condition([alias])
-            self.assertIn("Girls'' Love", cond)
-            self.assertIn("Yuri", cond)
+            params: dict = {}
+            cond = build_genre_sql_condition([alias], params)
+            self.assertEqual(params["genre_0_arr"], ["Girls' Love"])
+            self.assertEqual(json.loads(params["genre_0_t2"]), [{"name": "Yuri"}])
+            self.assertNotIn("'Girls'' Love'", cond)
 
     def test_build_genre_sql_demographics(self):
         """Demographics (Seinen, Shounen, Shoujo, Josei) must match tag name pattern."""
         for demo in ["Seinen", "Shounen", "Shoujo", "Josei"]:
-            cond = build_genre_sql_condition([demo])
-            self.assertIn(f'"name": "{demo}"', cond)
+            params: dict = {}
+            build_genre_sql_condition([demo], params)
+            self.assertEqual(json.loads(params["genre_0_tag"]), [{"name": demo}])
 
     def test_build_genre_sql_exclude(self):
         """Exclude mode must wrap conditions in NOT (...)."""
-        cond = build_genre_sql_condition(["Horror"], exclude=True)
+        params: dict = {}
+        cond = build_genre_sql_condition(["Horror"], params, exclude=True)
         self.assertTrue(cond.startswith("NOT ("))
-        self.assertIn("Horror", cond)
+        self.assertEqual(params["exclude_genre_0_arr"], ["Horror"])
 
     def test_build_genre_sql_empty(self):
         """Empty genre list must return None."""
-        self.assertIsNone(build_genre_sql_condition([]))
-        self.assertIsNone(build_genre_sql_condition(None))
+        self.assertIsNone(build_genre_sql_condition([], {}))
+        self.assertIsNone(build_genre_sql_condition(None, {}))
+
+    def test_build_genre_sql_requires_params(self):
+        """SVC-10: there is no inline-literal form to fall back to any more."""
+        with self.assertRaises(TypeError):
+            build_genre_sql_condition(["Action"])  # type: ignore[call-arg]
 
     # -------------------------------------------------------------
     # 4. Filter Hash Determinism Tests
