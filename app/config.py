@@ -54,8 +54,59 @@ class Settings(BaseSettings):
     DB_POOL_RECYCLE_S: int = int(os.getenv("DB_POOL_RECYCLE_S", "1800"))
     DB_STATEMENT_TIMEOUT_MS: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "15000"))
     DB_COMMAND_TIMEOUT_S: float = float(os.getenv("DB_COMMAND_TIMEOUT_S", "20"))
+    # Quality knob for the ANN graph walk. pgvector treats it as a hard ceiling on
+    # the candidate list unless iterative_scan is on, so it is no longer used to
+    # cap the pool and completeness comes from HNSW_ITERATIVE_SCAN instead.
     HNSW_EF_SEARCH: int = int(os.getenv("HNSW_EF_SEARCH", "200"))
+    # `relaxed_order` lets pgvector keep scanning past ef_search until the LIMIT is
+    # satisfied. Without it a LIMIT larger than ef_search returns fewer rows than
+    # asked for (measured: 39 of 100 at the default ef_search=40).
+    HNSW_ITERATIVE_SCAN: str = os.getenv("HNSW_ITERATIVE_SCAN", "relaxed_order")
+    # How many ANN candidates to fetch per requested row. The pool has to survive
+    # the title de-duplication and the relevance filter inside the CTE, so it is
+    # deliberately larger than the page.
+    HNSW_POOL_HEADROOM: int = int(os.getenv("HNSW_POOL_HEADROOM", "5"))
+    # Ceiling on that pool. Measured on a 95k-row catalog, 300 candidates took
+    # ~24 ms; an unbounded pool would let `page=100` ask for ~75k.
+    HNSW_MAX_POOL_LIMIT: int = int(os.getenv("HNSW_MAX_POOL_LIMIT", "1000"))
     DB_ENABLE_HNSW_FALLBACK: bool = os.getenv("DB_ENABLE_HNSW_FALLBACK", "true").lower() in ("true", "1", "yes")
+    # Precomputed `similar_mangas` edges older than this are ignored by
+    # /manga/{id}/similar in favour of a live ANN query. The edges were never
+    # invalidated before, so a re-embedded row served stale neighbours forever.
+    SIMILAR_EDGES_MAX_AGE_DAYS: int = int(os.getenv("SIMILAR_EDGES_MAX_AGE_DAYS", "30"))
+
+    # --- Title shortcut ("/recommend" deciding the query names one title) ---
+    # The shortcut is what makes a misspelled title search work (the semantic
+    # fallback recovers only 2 of 8 misspellings we measured) and what made 10 of
+    # 12 thematic searches return one obscure title instead of a genre list.
+    #
+    # TITLE_MATCH_MAX_WORD_SIM is the one rule here that is *structural* rather
+    # than tuned: a query whose every word appears verbatim inside a title is not
+    # a misspelling, it is a phrase that happens to occur in a title ("cooking"
+    # in "Hot-to-Go Bakery: Cooking the Dead", word_similarity = 1.000). Measured
+    # over 8 misspellings, the highest word_similarity is 0.933, so the veto
+    # costs nothing and does not drift as the catalogue grows.
+    #
+    # The other two are tuned and may need revisiting if titles get much longer
+    # or shorter on average. TITLE_MATCH_MIN_SIM is the original 0.40 (the
+    # misspelling set spans 0.429-0.824); the coverage bounds reject a short
+    # fragment of a long title, e.g. "sports underdog team" -> "Underdog" (0.36).
+    TITLE_MATCH_MIN_SIM: float = float(os.getenv("TITLE_MATCH_MIN_SIM", "0.40"))
+    TITLE_MATCH_MAX_WORD_SIM: float = float(os.getenv("TITLE_MATCH_MAX_WORD_SIM", "0.995"))
+    TITLE_MATCH_MIN_COVERAGE: float = float(os.getenv("TITLE_MATCH_MIN_COVERAGE", "0.5"))
+    TITLE_MATCH_MAX_COVERAGE: float = float(os.getenv("TITLE_MATCH_MAX_COVERAGE", "2.0"))
+
+    # --- Roulette sampling ---
+    # A draw is taken from this many short id ranges spread across the catalogue
+    # instead of one contiguous block. A contiguous block is one ingest batch:
+    # measured, 76% of a draw carried a MangaDex id against a 14% catalogue
+    # baseline, and every draw came from a single ingest day.
+    ROULETTE_SAMPLE_BLOCKS: int = int(os.getenv("ROULETTE_SAMPLE_BLOCKS", "8"))
+    # How many ids each range spans, as a multiple of the draw size. The ranges
+    # are scanned with index range scans, so cost follows this number and the
+    # block count rather than the table size -- unlike ORDER BY random(), which
+    # degrades as the catalogue grows.
+    ROULETTE_SAMPLE_OVERSCAN: int = int(os.getenv("ROULETTE_SAMPLE_OVERSCAN", "4"))
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

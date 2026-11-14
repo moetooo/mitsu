@@ -4,11 +4,22 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
-from ..models import RecommendRequest, RecommendResponse, RecommendationResult, RouletteRequest
+from ..models import (
+    RecommendRequest,
+    RecommendResponse,
+    RecommendationResult,
+    RouletteRequest,
+    TitleSuggestion,
+)
 from ..db_models import Manga
 from ..db import get_db
 from ..services.embedding import generate_embedding
-from ..services.retrieval import retrieve_similar_manga, retrieve_roulette_manga, find_matched_title
+from ..services.retrieval import (
+    retrieve_similar_manga,
+    retrieve_roulette_manga,
+    find_exact_title,
+    find_title_suggestion,
+)
 from ..services.llm import generate_reasoning
 from ..services.cache import get_cached, set_cached, generate_cache_key
 from ..services.search_autocorrect import autocorrect_query
@@ -64,7 +75,7 @@ async def roulette(request: RouletteRequest, db: AsyncSession = Depends(get_db))
         chapters=item.get("chapters"),
         volumes=item.get("volumes"),
         average_score=item.get("average_score"),
-        similarity_score=item.get("similarity_score", 0.88),
+        similarity_score=item.get("similarity_score"),
         llm_reasoning="Discovery Roulette candidate.",
         format_type=item.get("format_type"),
         is_nsfw=item.get("is_nsfw"),
@@ -98,7 +109,7 @@ async def roulette_batch(request: RouletteRequest, db: AsyncSession = Depends(ge
             chapters=item.get("chapters"),
             volumes=item.get("volumes"),
             average_score=item.get("average_score"),
-            similarity_score=item.get("similarity_score", 0.88),
+            similarity_score=item.get("similarity_score"),
             llm_reasoning="Discovery Roulette candidate.",
             format_type=item.get("format_type"),
             is_nsfw=item.get("is_nsfw"),
@@ -120,8 +131,40 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
     if cached_response:
         return cached_response
         
-    # 2. Title matching with typo tolerance or semantic retrieval
-    matched_title = await find_matched_title(db, request.query) if request.query else None
+    # 2. A query that is *exactly* a title is an unambiguous intent, so it keeps
+    # the old fast path: resolve the title, then serve things similar to it.
+    #
+    # Anything else -- including a close-but-not-exact title -- now runs the
+    # thematic search it asked for. That branch used to be taken by
+    # `find_matched_title`, whose fuzzy hit *replaced* the search: "monster
+    # hunting" returned *Monster Hunter* and the thematic results were never
+    # computed. The close title is still offered, as a suggestion beside the
+    # results rather than instead of them.
+    matched_title = await find_exact_title(db, request.query) if request.query else None
+
+    # A suggestion is computed alongside every thematic search. It is cheap (one
+    # trigram query) and only becomes part of the response when a confident
+    # close title exists.
+    title_suggestion = None
+    if request.query and not matched_title and request.page == 1:
+        close = await find_title_suggestion(db, request.query)
+        if close:
+            sug_id, sug_name, _sug_emb, sug_score = close
+            sug_row = await db.execute(
+                select(Manga.id, Manga.title_english, Manga.title_romaji,
+                       Manga.cover_image_url, Manga.format_type, Manga.start_year)
+                .where(Manga.id == sug_id)
+            )
+            sug = sug_row.first()
+            if sug:
+                title_suggestion = TitleSuggestion(
+                    id=sug.id,
+                    title=sug.title_english or sug.title_romaji or sug_name,
+                    cover_image_url=sug.cover_image_url,
+                    format_type=sug.format_type,
+                    start_year=sug.start_year,
+                    match_score=round(float(sug_score), 4),
+                )
     
     if matched_title:
         mid, matched_name, target_emb, _ = matched_title
@@ -139,8 +182,11 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
             if target_manga:
                 top_candidates.append({
                     "manga": target_manga,
-                    "similarity_score": 0.96,
-                    "hybrid_score": 0.96,
+                    # The seed is the title the user typed, so there is no
+                    # query-to-title similarity to report. It used to be a
+                    # hardcoded 0.96, which rendered as a fabricated "96% match".
+                    "similarity_score": None,
+                    "hybrid_score": None,
                     "format_type": getattr(target_manga, "format_type", None)
                 })
         
@@ -197,7 +243,8 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
             retrieval_ms=retrieval_ms,
             llm_ms=0.0,
             total_duration_ms=(time.time() - start_time) * 1000,
-            has_more=False
+            has_more=False,
+            title_suggestion=title_suggestion,
         )
         await set_cached(cache_key, response.model_dump(), ttl=1800)
         return response
@@ -239,6 +286,7 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         llm_ms=llm_ms,
         total_duration_ms=(time.time() - start_time) * 1000,
         has_more=has_more,
+        title_suggestion=title_suggestion,
     )
     
     # 6. Cache and Return

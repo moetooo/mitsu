@@ -4,8 +4,13 @@ from .config import settings
 
 
 # asyncpg 0.31 removed the connect-time `init` callback. Apply connection
-# settings through PostgreSQL startup parameters instead. Custom pgvector GUCs
-# are left at their defaults because not every deployment has the extension.
+# settings through PostgreSQL startup parameters instead.
+#
+# The pgvector GUCs (hnsw.ef_search, hnsw.iterative_scan) cannot be set here:
+# they are defined by the extension, which is only loaded once the `vector`
+# type is first touched in a session, so a startup packet or a connect-time SET
+# fails with "unrecognized configuration parameter". They are applied per query
+# by `retrieval.apply_ann_settings()` using transaction-local set_config.
 _CONNECT_ARGS = {
     "command_timeout": settings.DB_COMMAND_TIMEOUT_S,
     "server_settings": {

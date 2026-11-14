@@ -78,6 +78,9 @@ export default function App() {
   const [mangas, setMangas] = useState([]);
   const [selectedManga, setSelectedManga] = useState(null);
   const [searched, setSearched] = useState(false);
+  // "Did you mean <title>?" -- offered beside thematic results, never instead
+  // of them. The API only sends this for a query that is not an exact title.
+  const [titleSuggestion, setTitleSuggestion] = useState(null);
 
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -437,6 +440,8 @@ export default function App() {
       const newResults = data.results || [];
       if (pageNum === 1) {
         setMangas(newResults);
+        // A suggestion belongs to page 1 only; later pages must not resurrect it.
+        setTitleSuggestion(data.title_suggestion || null);
       } else {
         setMangas(prev => {
           const existingIds = new Set(prev.map(m => m.id));
@@ -537,6 +542,47 @@ export default function App() {
             </div>
 
             <main className="pb-20">
+              {/* "Did you mean <title>?" -- the close title this query nearly
+                  matches, offered as a choice instead of replacing the results.
+                  Clicking it searches the exact title, which takes the fast
+                  path and returns things similar to that series. */}
+              {searched && titleSuggestion && (
+                <div className="px-4 sm:px-8 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setQuery(titleSuggestion.title);
+                      handleSearch(null, titleSuggestion.title, 1, filters);
+                    }}
+                    className="group flex w-full items-center gap-3 rounded-lg border border-[var(--border-color)] bg-[var(--surface-color)] px-4 py-3 text-left transition-colors hover:border-[var(--accent-indigo)] sm:w-auto"
+                    aria-label={`Did you mean ${titleSuggestion.title}? Search that title instead`}
+                  >
+                    <span className="font-mono text-[11px] uppercase tracking-widest text-[var(--text-muted)]">
+                      Did you mean
+                    </span>
+                    {titleSuggestion.cover_image_url && (
+                      <img
+                        src={titleSuggestion.cover_image_url}
+                        alt=""
+                        aria-hidden="true"
+                        className="h-10 w-7 flex-none rounded object-cover"
+                        loading="lazy"
+                      />
+                    )}
+                    <span className="font-semibold text-[var(--text-color)] group-hover:text-[var(--accent-indigo)]">
+                      {titleSuggestion.title}
+                    </span>
+                    {titleSuggestion.start_year ? (
+                      <span className="font-mono text-xs text-[var(--text-muted)]">
+                        {titleSuggestion.start_year}
+                      </span>
+                    ) : null}
+                    <span className="ml-auto font-mono text-xs text-[var(--accent-indigo)]">
+                      Search →
+                    </span>
+                  </button>
+                </div>
+              )}
               <MangaGrid
                 mangas={mangas}
                 loading={loading}

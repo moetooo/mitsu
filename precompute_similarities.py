@@ -8,7 +8,9 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from sqlalchemy import select
 from app.db import AsyncSessionLocal
 from app.db_models import Manga
-from app.services.retrieval import retrieve_similar_manga
+from app.services.retrieval import retrieve_similar_manga, similar_edges_are_fresh
+
+from datetime import datetime, timezone
 
 async def precompute_similarities():
     async with AsyncSessionLocal() as session:
@@ -21,11 +23,18 @@ async def precompute_similarities():
         print("Precomputing similarities in chunks (streaming)...")
         
         i = 0
+        computed = 0
+        skipped = 0
         async for manga in result.scalars():
             i += 1
-            if manga.similar_mangas is not None:
-                continue # Skip if already computed
-                
+            # Recompute when the stored edges are missing or past
+            # SIMILAR_EDGES_MAX_AGE_DAYS. This used to be `is not None`, so the
+            # job was write-once: a re-embedded row kept neighbours computed
+            # from its old vector forever and the reader had no way to tell.
+            if similar_edges_are_fresh(manga):
+                skipped += 1
+                continue
+
             candidates = await retrieve_similar_manga(
                 session, 
                 query_embedding=manga.embedding, 
@@ -45,14 +54,18 @@ async def precompute_similarities():
             
             # Update DB
             manga.similar_mangas = similar_list
+            # Stamped so the reader can decide whether the edges are still
+            # usable; without it every stored edge read as stale.
+            manga.similarities_computed_at = datetime.now(timezone.utc)
             session.add(manga)
+            computed += 1
             
             if i % 100 == 0:
                 await session.commit()
-                print(f"Processed {i} mangas.")
+                print(f"Processed {i} mangas ({computed} computed, {skipped} fresh).")
                 
         await session.commit()
-        print("Done precomputing similarities.")
+        print(f"Done precomputing similarities: {computed} computed, {skipped} already fresh.")
 
 if __name__ == "__main__":
     asyncio.run(precompute_similarities())

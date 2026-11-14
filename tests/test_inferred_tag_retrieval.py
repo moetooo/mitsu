@@ -181,8 +181,18 @@ async def test_h_no_sql_n_plus_one():
         limit=10
     )
 
-    # Verify session.execute was called exactly ONCE (no N+1 loops)
-    assert mock_session.execute.call_count == 1
+    # Two statements: the transaction-local ANN settings, then the single
+    # candidate query. What this guard exists for is that scoring does not run
+    # one query per candidate, so the count must stay constant as the candidate
+    # list grows.
+    assert mock_session.execute.call_count == 2, (
+        f"expected 1 settings + 1 candidate query, got {mock_session.execute.call_count}"
+    )
+    settings_sql = str(mock_session.execute.call_args_list[0][0][0])
+    assert "set_config" in settings_sql, (
+        "the first statement must apply hnsw settings; without it the ANN scan is "
+        "capped at ef_search and returns fewer rows than requested"
+    )
     sql_text = str(mock_session.execute.call_args[0][0])
     assert "tag_alignment" in sql_text
     assert "q_tag_0" in mock_session.execute.call_args[0][1]

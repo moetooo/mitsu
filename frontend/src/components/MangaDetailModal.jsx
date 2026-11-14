@@ -92,7 +92,11 @@ export default function MangaDetailModal({
     }
   }, [manga?.cover_image_url]);
 
-  const matchPct = manga?.similarity_score !== undefined ? Math.round(manga.similarity_score * 100) : null;
+  // null as well as undefined means "no similarity was computed" (roulette
+  // reports null now); `null * 100` is 0, so it used to render a 0% match.
+  const matchPct = manga?.similarity_score === undefined || manga?.similarity_score === null
+    ? null
+    : Math.round(manga.similarity_score * 100);
   const activeHover = hoverBorderMap[hoverAccent] || hoverBorderMap.vermillion;
 
   // Feature 32: Detect Explicit NSFW content (Hentai / Erotica / Adult - excluding standard Ecchi)

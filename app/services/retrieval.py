@@ -4,6 +4,7 @@ import json
 import asyncio
 import time
 import re
+from datetime import datetime, timedelta, timezone
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional, Dict, Any, Set, Tuple
@@ -149,6 +150,128 @@ def generate_filter_hash(filters: Optional[RecommendFilters]) -> str:
 
 def _sql_literal(value: str) -> str:
     return value.replace("'", "''")
+
+
+async def apply_ann_settings(session: AsyncSession, ef_search: Optional[int] = None) -> None:
+    """Apply the pgvector ANN settings for the current transaction.
+
+    These must be set here rather than on the connection pool because pgvector is
+    loaded lazily: until the `vector` type is used in a session the GUCs do not
+    exist, so a startup parameter or a connect-time SET raises
+    `unrecognized configuration parameter "hnsw.ef_search"`.
+
+    `set_config(..., true)` is transaction-local, so a pooled connection is never
+    left carrying one caller's setting -- the same reason
+    `find_matched_title` sets the pg_trgm thresholds this way.
+
+    `hnsw.iterative_scan = 'relaxed_order'` is what makes an ANN scan able to
+    return more than `ef_search` rows. Measured against a 95k-row catalog:
+    `ORDER BY embedding <=> q LIMIT 100` returned 39 rows with the default
+    `ef_search = 40`, and 100 once relaxed_order was on.
+    """
+    ef = int(ef_search if ef_search is not None else settings.HNSW_EF_SEARCH)
+    iterative = (settings.HNSW_ITERATIVE_SCAN or "off").strip().lower()
+    if iterative not in ("off", "relaxed_order", "strict_order"):
+        iterative = "off"
+    await session.execute(
+        text(
+            "SELECT set_config('hnsw.ef_search', :ef, true), "
+            "set_config('hnsw.iterative_scan', :iterative, true)"
+        ),
+        {"ef": str(ef), "iterative": iterative},
+    )
+
+
+def compute_pool_limit(offset: int, limit: int) -> int:
+    """ANN candidate budget for one page.
+
+    The pool has to cover the requested page *before* the CTE's title
+    de-duplication and relevance filter run, so it scales with `offset + limit`
+    and multiplies by a headroom factor.
+
+    The previous formula clamped the result to `HNSW_EF_SEARCH` (200), which made
+    the offset term inert -- every page asked for exactly 200 candidates, so
+    anything past the first few pages was silently unreachable. The ceiling is
+    now a separate setting, and completeness is delivered by
+    `hnsw.iterative_scan` rather than by keeping the pool small.
+    """
+    needed = max(0, int(offset)) + max(1, int(limit))
+    pool = max(settings.HNSW_EF_SEARCH, needed * max(1, settings.HNSW_POOL_HEADROOM))
+    return min(pool, max(settings.HNSW_EF_SEARCH, settings.HNSW_MAX_POOL_LIMIT))
+
+
+def is_confident_title_match(query: str, title: Optional[str], sim: float, word_sim: float) -> Tuple[bool, str]:
+    """Should a fuzzy trigram hit be treated as "the user typed this title"?
+
+    Returns (accepted, reason_if_rejected) so callers and tests can say why.
+
+    The old rule was `match_score >= 0.48 or sim >= 0.40 or word_sim >= 0.65`.
+    The `word_sim >= 0.65` arm is the problem: `word_similarity` is 1.000
+    whenever one query word occurs in the title, so "cooking", "survival" and
+    "detective" all resolved to a single title. Measured: 10 of 12 thematic
+    queries took the title branch.
+
+    A verbatim word fragment is therefore rejected. A misspelling cannot appear
+    verbatim in a title -- over 8 measured misspellings the highest
+    word_similarity is 0.933 -- so this veto costs no typo tolerance. It is also
+    the only rule here that does not need re-tuning as the catalogue grows.
+    """
+    if not query or not title:
+        return False, "no-title"
+
+    q = query.strip().lower()
+    t = title.strip().lower()
+    if not q or not t:
+        return False, "no-title"
+
+    # The user typed the title exactly; the exact-match query already caught that
+    # case, so reaching here with identical text means a different row collided.
+    if q == t:
+        return True, ""
+
+    if word_sim >= settings.TITLE_MATCH_MAX_WORD_SIM:
+        return False, "verbatim-fragment"
+
+    if sim < settings.TITLE_MATCH_MIN_SIM:
+        return False, "similarity"
+
+    coverage = len(q) / len(t)
+    if not (settings.TITLE_MATCH_MIN_COVERAGE <= coverage <= settings.TITLE_MATCH_MAX_COVERAGE):
+        return False, "coverage"
+
+    return True, ""
+
+
+def similar_edges_are_fresh(manga: Any, max_age_days: Optional[int] = None) -> bool:
+    """Is this row's precomputed `similar_mangas` list still usable?
+
+    The edges are produced only by the precomputation job, which used to skip any
+    row that already had them, so a re-embedded title kept neighbours calculated
+    from its old vector forever. `similarities_computed_at` existed but nothing
+    read it.
+
+    A row is usable only when it has edges *and* a timestamp inside the window.
+    A row with edges but no timestamp is treated as stale, because its age is
+    unknown rather than zero. Rows the ingestion pipeline invalidated have both
+    fields cleared, so they also read as not-fresh and fall back to a live ANN
+    query.
+    """
+    edges = getattr(manga, "similar_mangas", None)
+    if not edges:
+        return False
+
+    written_at = getattr(manga, "similarities_computed_at", None)
+    if written_at is None:
+        return False
+
+    days = settings.SIMILAR_EDGES_MAX_AGE_DAYS if max_age_days is None else max_age_days
+    if days <= 0:
+        return True
+
+    now = datetime.now(timezone.utc)
+    if written_at.tzinfo is None:
+        written_at = written_at.replace(tzinfo=timezone.utc)
+    return (now - written_at) <= timedelta(days=days)
 
 
 def _tag_json_condition(tag_name: str, key: str, params: Optional[Dict[str, Any]]) -> str:
@@ -303,14 +426,17 @@ def infer_format_type(*args, **kwargs) -> str:
     return _infer_format_type(*args, **kwargs)
 
 
-async def find_matched_title(
+async def find_exact_title(
     session: AsyncSession,
     query: Optional[str] = None
 ) -> Optional[Tuple[int, str, List[float], float]]:
-    """
-    Identifies if a search query targets a specific manga title (including typos/misspellings)
-    using exact matching, prefix matching, and trigram/word similarity via pg_trgm GIN indexes.
-    Returns (manga_id, matched_title, embedding_list, match_score) or None.
+    """Resolve a query that is *exactly* a title (or alternative title).
+
+    This is the only branch that is allowed to replace the search. Typing a
+    title verbatim is an unambiguous intent, and the lookup is one indexed
+    query, so keeping it as a fast path costs nothing.
+
+    Returns (manga_id, matched_title, embedding_list, 1.0) or None.
     """
     if not query or not query.strip():
         return None
@@ -318,7 +444,6 @@ async def find_matched_title(
     if len(clean_q) < 3:
         return None
 
-    # 1. Exact title match (case-insensitive)
     res = await session.execute(text("""
         SELECT id, title_english, title_romaji, embedding::real[], popularity
         FROM manga
@@ -342,6 +467,35 @@ async def find_matched_title(
             return exact[0], exact[1] or exact[2], exact[3], 1.0
         except Exception:
             pass
+    return None
+
+
+async def find_title_suggestion(
+    session: AsyncSession,
+    query: Optional[str] = None
+) -> Optional[Tuple[int, str, List[float], float]]:
+    """Look for a *close* title to offer alongside a thematic search.
+
+    This used to be `find_matched_title`, and its result *replaced* the search:
+    "monster hunting" resolved to *Monster Hunter* and the thematic results
+    were never computed. Five measured thematic phrases were hijacked this way
+    (`monster hunting`, `time travel`, `romance between rivals`,
+    `isekai with a weak protagonist`, `villainess reincarnation`).
+
+    Raising the threshold instead was measured and rejected: `sim >= 0.75`
+    clears all five hijacks but loses 3 of 8 misspellings.
+
+    The honest fix is to stop choosing for the user. This function still
+    tolerates typos, but its answer is now a *suggestion* shown next to the
+    real thematic results, never a replacement for them.
+
+    Returns (manga_id, matched_title, embedding_list, match_score) or None.
+    """
+    if not query or not query.strip():
+        return None
+    clean_q = query.strip().lower()
+    if len(clean_q) < 3:
+        return None
 
     # 2. Fast Trigram / word similarity match using GIN indexes
     # One round-trip and transaction-local, so pooled connections never inherit these.
@@ -362,16 +516,16 @@ async def find_matched_title(
         WHERE (:q <% title_english OR :q <% title_romaji OR title_english % :q OR title_romaji % :q)
           AND embedding IS NOT NULL
         ORDER BY match_score DESC
-        LIMIT 1;
+        LIMIT 5;
     """), {'q': clean_q})
-    row = res.fetchone()
-    if row:
-        mid, t_en, t_ro, emb, pop, sim, w_sim, score = row
-        if score >= 0.48 or sim >= 0.40 or w_sim >= 0.65:
-            try:
-                return mid, t_en or t_ro, emb, float(score)
-            except Exception:
-                pass
+
+    # A few candidates rather than one: the best-scoring hit may be a verbatim
+    # word fragment (a theme, not a title) while the second is the real title.
+    for mid, t_en, t_ro, emb, pop, sim, w_sim, score in res.fetchall():
+        name = t_en or t_ro
+        accepted, _reason = is_confident_title_match(clean_q, name, float(sim), float(w_sim))
+        if accepted:
+            return mid, name, emb, float(score)
 
     return None
 
@@ -477,9 +631,14 @@ async def retrieve_similar_manga(
     # idx_manga_embedding_hnsw. Ranking and dedup then run on a bounded
     # candidate pool instead of scanning the whole partitioned table.
     # ------------------------------------------------------------------
-    pool_limit = max(200, (offset + limit) * 15)
-    pool_limit = min(pool_limit, max(10, settings.HNSW_EF_SEARCH))
+    pool_limit = compute_pool_limit(offset, limit)
     params["pool_limit"] = pool_limit
+
+    # pgvector runs at its default ef_search (40) and with iterative_scan off
+    # unless this is set, which caps an ordered ANN scan at ef_search candidates:
+    # `LIMIT 100` returned 39 rows. apply_ann_settings is transaction-local, so it
+    # has to precede the query on the same session.
+    await apply_ann_settings(session)
 
     pool_columns = """
             id, anilist_id, mal_id, mangadex_id,
@@ -576,8 +735,13 @@ async def retrieve_similar_manga(
     result = await session.execute(sql, params)
     rows = result.all()
 
-    # Selective SQL filters can shrink the ANN pool below the requested page.
-    # Re-run the exact (non-ANN) ordering only in that underfill case.
+    # Selective SQL filters can still shrink the pool below the requested page,
+    # because the HNSW index cannot apply them and they are checked per candidate.
+    # This retry drops the explicit ORDER BY ... LIMIT pool and lets the planner
+    # choose; note that with the HNSW index available the planner may still use
+    # it, so this is a second plan rather than a guaranteed exact scan. A truly
+    # exact scan costs ~5.6 s for 300 rows on a 95k-row catalog and is not
+    # something to put on a request path.
     if filters is not None and len(rows) < max(1, limit) and settings.DB_ENABLE_HNSW_FALLBACK:
         try:
             result = await session.execute(legacy_sql, params)
@@ -612,17 +776,25 @@ async def retrieve_similar_manga(
             r.title_native, r.tags, r.genres, r.site_url, r.inferred_tags
         )
 
+        # The displayed score is the score the ranking actually used.
+        #
+        # It used to be floored: `max(score, 0.96)` for an exact title and
+        # `max(score, 0.88)` for a prefix, applied after the query ran. That
+        # turned a real 0.42 similarity into a rendered "96%", and it made
+        # three genuinely different matches (Berserk: The Prototype, Berserk:
+        # The Flame Dragon Knight, Berserk of Gluttony) all render as exactly
+        # "88%" -- the floor value, not a measured one.
+        #
+        # The title preference is not lost by removing this: `title_boost`
+        # already enters `hybrid_score` as a 0.30-weighted term in the SQL, so
+        # exact and prefix hits still rank first. Only the dishonest number is
+        # gone.
         score_val = float(r.hybrid_score)
-        # Boost perceived match percentage for exact/prefix title matches
-        if hasattr(r, 'title_boost'):
-            if r.title_boost >= 1.0:
-                score_val = max(score_val, 0.96)
-            elif r.title_boost >= 0.6:
-                score_val = max(score_val, 0.88)
 
         cand_dict = {
             "manga": m,
             "similarity_score": score_val,
+            "title_boost": float(getattr(r, "title_boost", 0.0) or 0.0),
             "format_type": m.format_type
         }
         if hasattr(r, 'tag_alignment'):
@@ -636,26 +808,71 @@ async def retrieve_similar_manga(
 # PRODUCTION DIVERSITY & NON-ORDER-BY-RANDOM SAMPLING
 # =========================================================
 
+# Trailing markers that distinguish a volume/season entry from the series itself.
+_VOLUME_MARKER = re.compile(
+    r"\s*[\u2013\u2014-]?\s*(?:vol(?:ume)?\.?|book|part|season|season\s+\d+|"
+    r"chapter|ch\.|#)\s*\d+\s*$",
+    re.IGNORECASE,
+)
+
+
+def franchise_key(title: Optional[str], row_id: Any = None) -> str:
+    """A normalized key used to keep one series from filling a whole page.
+
+    This replaces `title.lower()[:15]`. The blind 15-character cut merged
+    genuinely different series -- "Berserk" with "Berserk of Gluttony" -- and in
+    this catalogue 81 different Gundam titles share one 15-character prefix, as
+    do 79 villainess titles.
+
+    The key is deliberately conservative: the whole normalized title, with a
+    trailing volume/season/chapter marker removed. Two differently-named entries
+    are therefore never merged, which is the failure mode that loses titles from
+    a page. Merging a sequel into its parent is a nice-to-have and needs a real
+    series identifier, not a title heuristic.
+    """
+    if not title or not str(title).strip():
+        return f"id:{row_id}"
+
+    text_value = str(title).strip().lower()
+    # Unify the separators that catalogues use interchangeably.
+    text_value = re.sub(r"[_/\\|~]", ":", text_value)
+    text_value = re.sub(r"\s+", " ", text_value)
+    # Drop a trailing volume/season marker, then any now-trailing punctuation.
+    text_value = _VOLUME_MARKER.sub("", text_value)
+    text_value = text_value.strip(" -\u2013\u2014:.,")
+    return text_value or f"id:{row_id}"
+
+
 def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target: int = 50) -> List[Dict[str, Any]]:
-    """Applies lightweight rule-based diversity (genres, format, score bands, hidden gems)"""
+    """Applies lightweight rule-based diversity (genres, format, score bands, hidden gems)
+
+    `exclude_ids` is honoured absolutely. It used to be undone: when every row was
+    excluded the function restored the full unfiltered list, so marking a title as
+    already-seen had no effect at exactly the moment it mattered. Relaxing the
+    seen set is a product decision and belongs to the caller, which already does
+    it explicitly for Discovery Roulette.
+    """
     if not rows:
         return []
 
-    # 1. Deduplicate seen IDs & Franchise series titles
+    # 1. Drop already-seen rows, then collapse repeats of the same series.
     seen_titles: Set[str] = set()
     filtered_rows = []
 
     for r in rows:
         if r.id in exclude_ids:
             continue
-        stem = (r.title_english or r.title_romaji or str(r.id)).lower().strip()[:15]
+        stem = franchise_key(r.title_english or r.title_romaji or r.title_native, r.id)
         if stem in seen_titles:
             continue
         seen_titles.add(stem)
         filtered_rows.append(r)
 
     if not filtered_rows:
-        filtered_rows = rows  # Fallback to full set if over-filtered
+        # Nothing survived: either every candidate was already seen, or the page is
+        # a single series. Returning the unfiltered rows here is what made
+        # `exclude_ids` a no-op; the caller decides whether to relax it.
+        return []
 
     # 2. Separate into High Confidence vs. Hidden Gems
     high_confidence = []
@@ -709,10 +926,14 @@ def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target
     out = []
     for r in diverse_selection:
         title = r.title_english or r.title_romaji or r.title_native or "Unknown Title"
-        sim_score = round((r.average_score or 85) / 100.0, 2)
         fmt = getattr(r, "format_type", None) or infer_format_type(
             r.title_native, r.tags, r.genres, r.site_url
         )
+        # No similarity is computed for roulette, so no similarity_score is
+        # reported. The previous value was `average_score / 100` with a default
+        # of 85 -- a community score presented as a match percentage, so an
+        # unrated title claimed an 85% "match". `average_score` is already its
+        # own field below.
         out.append({
             "id": r.id,
             "anilist_id": r.anilist_id,
@@ -728,7 +949,7 @@ def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target
             "chapters": r.chapters,
             "volumes": r.volumes,
             "average_score": r.average_score,
-            "similarity_score": sim_score,
+            "similarity_score": None,
             "llm_reasoning": "Discovery Roulette candidate.",
             "format_type": fmt
         })
@@ -741,7 +962,21 @@ async def sample_candidates_from_db(
     filters: Optional[RecommendFilters] = None,
     sample_limit: int = 150
 ) -> List[Any]:
-    """Efficient SQL sampling using MOD hash & pseudo-random offsets without ORDER BY RANDOM()"""
+    """Sample candidates from across the whole catalogue, cheaply.
+
+    Ids follow ingestion order, so one contiguous block of them is one ingest
+    batch, and therefore one source. Measured: 76% of a draw carried a MangaDex
+    id against a 14% catalogue baseline, and every draw came from a single ingest
+    day. The year spread did not change -- this catalogue is 99.8% 2000+ -- so
+    source, not era, is what the block was skewing.
+
+    This takes one short range from each of several evenly spaced slices of the
+    id space instead. Each range is an index range scan, so the work is set by
+    `ROULETTE_SAMPLE_BLOCKS` and the per-block width -- not by the table size.
+    `ORDER BY random()` was the obvious alternative and was rejected: its cost
+    grows with the catalogue and it would silently become the slowest query here
+    as the table grows.
+    """
     where_clauses = ["cover_image_url IS NOT NULL"]
 
     allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
@@ -753,7 +988,6 @@ async def sample_candidates_from_db(
     params: Dict[str, Any] = {
         "limit": sample_limit,
         "seed": rand_seed,
-        "rand_frac": random.random(),
     }
 
     apply_filter_criteria(filters, where_clauses, params)
@@ -765,16 +999,35 @@ async def sample_candidates_from_db(
           synopsis, genres, tags, status, start_year, chapters, volumes,
           average_score, popularity, cover_image_url, banner_image, site_url"""
 
-    # Random PK slice instead of sorting every row with hashtext().
+    bounds = (await session.execute(text(
+        "SELECT COALESCE(MIN(id), 0) AS lo, COALESCE(MAX(id), 0) AS hi FROM manga"
+    ))).one()
+    lo, hi = int(bounds.lo), int(bounds.hi)
+
+    blocks = max(1, settings.ROULETTE_SAMPLE_BLOCKS)
+    span = max(1, (sample_limit * max(1, settings.ROULETTE_SAMPLE_OVERSCAN)) // blocks)
+
+    # One random start per slice, so a draw spans the catalogue instead of an era.
+    slot = max(1, (hi - lo + 1) // blocks)
+    starts = []
+    for i in range(blocks):
+        slot_lo = lo + i * slot
+        start = slot_lo + random.randint(0, max(0, slot - span))
+        starts.append(min(start, hi))
+
+    params["starts"] = starts
+    params["span"] = span
+
+    # ORDER BY hashtext() sorts only the sampled ranges (blocks * span rows), so it
+    # picks a random subset of them without sorting the table.
     sql = text(f"""
-        WITH bounds AS (
-          SELECT COALESCE(MIN(id), 0) AS lo, COALESCE(MAX(id), 0) AS hi FROM manga
-        )
+        WITH starts AS (SELECT unnest(CAST(:starts AS bigint[])) AS s)
         SELECT {columns}
-        FROM manga, bounds
-        WHERE id >= bounds.lo + FLOOR((bounds.hi - bounds.lo) * :rand_frac)::bigint
+        FROM manga, starts
+        WHERE manga.id >= starts.s
+          AND manga.id < starts.s + :span
           AND {where_str}
-        ORDER BY id ASC
+        ORDER BY hashtext(manga.id::text || :seed) DESC
         LIMIT :limit;
     """)
 
@@ -782,6 +1035,8 @@ async def sample_candidates_from_db(
     rows = list(result.all())
 
     if len(rows) < max(1, sample_limit // 4):
+        # Selective filters can miss every sampled range. Only now pay for the
+        # whole-table hash ordering, which is what the old path always did.
         fb = text(f"""
             SELECT {columns}
             FROM manga
@@ -846,12 +1101,29 @@ async def retrieve_roulette_manga(
     if pool_size < ROULETTE_REFILL_THRESHOLD and session_id:
         asyncio.create_task(refill_roulette_pool(filters, session_id))
 
-    # 4. Attempt popping from Redis candidate pool
+    # 4. Attempt popping from Redis candidate pool.
+    #
+    # This popped exactly `max(pool_limit, 4)` items. If all of them happened to
+    # be in the session's seen set, the loop gave up and went to the database --
+    # discarding a pool that might still hold dozens of unseen rows. The pool is
+    # drained by LPOP, so those unseen rows were simply thrown away.
+    # It now pops in bounded rounds until it has enough unseen rows, the pool is
+    # empty, or the budget is spent.
     results = []
     if pool_size > 0:
-        popped_items = await cache.pop_roulette_pool(filter_hash, count=max(pool_limit, 4))
-        # Exclude seen items
-        unseen_items = [item for item in popped_items if item["id"] not in combined_seen]
+        wanted = max(pool_limit, 4)
+        budget = max(wanted * 4, ROULETTE_POOL_TARGET)
+        unseen_items: List[dict] = []
+        popped_total = 0
+        while len(unseen_items) < pool_limit and popped_total < budget:
+            round_size = min(wanted, budget - popped_total)
+            popped_items = await cache.pop_roulette_pool(filter_hash, count=round_size)
+            if not popped_items:
+                break
+            popped_total += len(popped_items)
+            unseen_items.extend(
+                item for item in popped_items if item["id"] not in combined_seen
+            )
         if unseen_items:
             random.shuffle(unseen_items)
             results = unseen_items[:pool_limit]
@@ -860,8 +1132,16 @@ async def retrieve_roulette_manga(
     if not results:
         db_rows = await sample_candidates_from_db(session, filters=filters, sample_limit=80)
         results = apply_diversity_filtering(db_rows, exclude_ids=combined_seen, max_target=pool_limit)
+        if not results:
+            # Every row in this draw was already seen. Draw again before relaxing:
+            # the sample is 80 rows out of ~95k, so a second draw almost always
+            # contains unseen ones, whereas re-filtering the same 80 rows with an
+            # empty exclusion set can only re-serve something already shown.
+            retry_rows = await sample_candidates_from_db(session, filters=filters, sample_limit=80)
+            results = apply_diversity_filtering(retry_rows, exclude_ids=combined_seen, max_target=pool_limit)
         if not results and db_rows:
-            # Absolute fallback if all candidates were seen
+            # Absolute fallback: the catalogue really is exhausted for this
+            # session, so repeat rather than return nothing.
             results = apply_diversity_filtering(db_rows, exclude_ids=set(), max_target=pool_limit)
         if results:
             random.shuffle(results)
