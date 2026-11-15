@@ -8,10 +8,9 @@ const SurpriseView = lazy(() => import('./components/SurpriseView'));
 import HeroBanner from './components/HeroBanner';
 import BackToTop from './components/BackToTop';
 import { API_ROUTES } from './config';
-import { readJSON, writeJSON } from './utils/storage';
 import { loadVocabulary, FALLBACK_GROUPS, FALLBACK_FORMATS } from './utils/vocabulary';
-import { toggleBookmark, toStoredBookmarks } from './utils/bookmarks';
 import useSettings from './hooks/useSettings';
+import useBookmarks from './hooks/useBookmarks';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
 const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
@@ -136,12 +135,9 @@ export default function App() {
   // changes, and keeps it when the same set just grows by a page.
   const [searchResultKey, setSearchResultKey] = useState('');
 
-  // Saved titles. Capped and projected on the way in as well as on the way out,
-  // so a hand-edited or legacy blob cannot load 2,000 entries (FE-18).
-  const [bookmarks, setBookmarks] = useState(() => {
-    const saved = readJSON(['mitsu_bookmarks', 'mangamind_bookmarks'], []);
-    return Array.isArray(saved) ? toStoredBookmarks(saved) : [];
-  });
+  // FE-29: saved titles, their projection/cap and their persistence are one hook.
+  const { bookmarks, toggleBookmark: handleToggleBookmark, clearBookmarks, isBookmarked } =
+    useBookmarks();
 
   // Trending Section Divided State & Filters
   const [trendingFormat, setTrendingFormat] = useState('all'); // 'all' | 'manga' | 'manhwa' | 'manhua'
@@ -430,11 +426,6 @@ export default function App() {
   // FE-29: the DOM attributes and the storage write moved into useSettings with
   // the value they belong to.
 
-  // FE-18: bookmarks persistence stays here until useBookmarks owns it.
-  useEffect(() => {
-    if (Array.isArray(bookmarks)) writeJSON('mitsu_bookmarks', toStoredBookmarks(bookmarks));
-  }, [bookmarks]);
-
   const hasActiveFilters =
     (filters.status && filters.status.length > 0) ||
     filters.min_year ||
@@ -459,11 +450,6 @@ export default function App() {
     (filters.exclude_genres && filters.exclude_genres.length > 0) ? filters.exclude_genres.length : 0,
     filters.format_type ? 1 : 0
   ].reduce((a, b) => a + b, 0);
-
-  // FE-18: add/remove, project and cap in one place (utils/bookmarks.js).
-  const handleToggleBookmark = (mangaToToggle) => {
-    setBookmarks(prev => toggleBookmark(prev, mangaToToggle));
-  };
 
   const handleSearch = async (e, customQuery = null, pageNum = 1, customFilters = null) => {
     if (e) e.preventDefault();
@@ -840,7 +826,7 @@ export default function App() {
                 bookmarks={bookmarks}
                 onSelectManga={setSelectedManga}
                 onToggleBookmark={handleToggleBookmark}
-                onClearAll={() => setBookmarks([])}
+                onClearAll={clearBookmarks}
                 gridSize={settings.gridSize || 'standard'}
                 hoverAccent={settings.hoverAccent || 'vermillion'}
               />
@@ -857,7 +843,7 @@ export default function App() {
           onClose={() => setSelectedManga(null)}
           onSelectTag={handleTagClick}
           onSelectManga={setSelectedManga}
-          isBookmarked={selectedManga ? bookmarks.some(b => b.id === selectedManga.id) : false}
+          isBookmarked={selectedManga ? isBookmarked(selectedManga.id) : false}
           onToggleBookmark={handleToggleBookmark}
           hoverAccent={settings.hoverAccent || 'vermillion'}
           nsfwBlur={settings.nsfwBlur !== false}
