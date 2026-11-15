@@ -7,13 +7,13 @@ const BookmarksView = lazy(() => import('./components/BookmarksView'));
 const SurpriseView = lazy(() => import('./components/SurpriseView'));
 import HeroBanner from './components/HeroBanner';
 import BackToTop from './components/BackToTop';
-import { API_ROUTES } from './config';
 import { loadVocabulary, FALLBACK_GROUPS, FALLBACK_FORMATS } from './utils/vocabulary';
 import useSettings from './hooks/useSettings';
 import useBookmarks from './hooks/useBookmarks';
 import useTabRouting from './hooks/useTabRouting';
 import useTrending from './hooks/useTrending';
 import useSearch from './hooks/useSearch';
+import useSurprise from './hooks/useSurprise';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
 const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
@@ -35,13 +35,6 @@ const INITIAL_FILTERS = {
 };
 
 
-// A per-draw session id: the roulette dedupes by session, so a fresh draw starts
-// a new one. (FE-29 leaves this with the discovery queue it belongs to.)
-const newSessionId = () =>
-  (typeof crypto !== 'undefined' && crypto.randomUUID
-    ? crypto.randomUUID()
-    : 'session_' + Math.random().toString(36).substring(2, 9));
-
 export default function App() {
   // FE-29: tab state, the URL that mirrors it and Back/Forward live in one hook.
   const { activeTab, setActiveTab, pushTab } = useTabRouting();
@@ -50,21 +43,6 @@ export default function App() {
 
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
-
-  // ---- Surprise Me: the App owns the discovery queue (FE-10) --------------
-  // This used to be a single `surpriseManga` plus a seen-id array, while
-  // SurpriseView kept its own copy of the same titles, its own seen-id Set and
-  // its own refill timer. Two owners of one queue is why a draw could be
-  // appended twice, skipped, or shown from a stale index.
-  const [surpriseQueue, setSurpriseQueue] = useState([]);
-  const [loadingSurprise, setLoadingSurprise] = useState(false);
-  const [surpriseKey, setSurpriseKey] = useState(0);
-  // FE-25: a failed draw must not look like "nothing matched".
-  const [surpriseError, setSurpriseError] = useState(null);
-  // FE-10: recent ids only. The list is serialized into every request body, so
-  // an unbounded one grows into the multi-KB range after a long session.
-  const MAX_SEEN_IDS = 200;
-  const seenRouletteIdsRef = useRef([]);
 
   // FE-29: preferences, their DOM attributes and their persistence are one hook.
   const { settings, updateSettings, requestLimit } = useSettings();
@@ -107,18 +85,11 @@ export default function App() {
     useBookmarks();
 
 
-  // FE-17: the session id lived in state *and* a ref that mirrored it, so the
-  // state was write-only. The ref is the single owner.
-  const sessionIdRef = useRef(newSessionId());
-
   // One sequence number and one AbortController per request channel. A newer
   // request cancels the older one, and a response whose sequence is stale is
   // never allowed to write to state — a slow page 1 cannot overwrite page 3.
   const requestRef = useRef({ search: 0, trending: 0, surprise: 0 });
   const abortRef = useRef({ search: null, trending: null, surprise: null });
-  const surpriseInFlightRef = useRef(null);
-  // Set when the roulette answers 404: nothing matches the current filters.
-  const [surpriseExhausted, setSurpriseExhausted] = useState(false);
 
   const beginRequest = (channel) => {
     abortRef.current[channel]?.abort();
@@ -161,121 +132,23 @@ export default function App() {
     searchForTag
   } = useSearch({ beginRequest, requestLimit, allowNsfw: settings.allowNsfw });
 
-  // Falsy rows are dropped here, at insertion, not in the view: a hole in the
-  // queue shifts every later offset against currentIndex (FE-28).
-  const appendSurpriseRows = (rows) => {
-    const clean = (Array.isArray(rows) ? rows : []).filter(row => row && row.id != null);
-    if (clean.length === 0) return 0;
-
-    const seen = seenRouletteIdsRef.current;
-    for (const row of clean) if (!seen.includes(row.id)) seen.push(row.id);
-    if (seen.length > MAX_SEEN_IDS) seen.splice(0, seen.length - MAX_SEEN_IDS);
-
-    setSurpriseQueue(prev => {
-      const known = new Set(prev.map(row => row.id));
-      return [...prev, ...clean.filter(row => !known.has(row.id))];
-    });
-    return clean.length;
-  };
-
-  const runSurprise = async (forceFresh) => {
-    setLoadingSurprise(true);
-    setSurpriseExhausted(false);
-    setSurpriseError(null);
-    const currSeen = forceFresh ? [] : seenRouletteIdsRef.current;
-    const currentSession = forceFresh ? newSessionId() : sessionIdRef.current;
-
-    if (forceFresh) {
-      sessionIdRef.current = currentSession;
-    }
-
-    const { controller, isCurrent } = beginRequest('surprise');
-
-    // Small anticipation delay (~550ms) so "Discovering Titles..." is visibly displayed
-    const minDelayPromise = new Promise(resolve => setTimeout(resolve, 550));
-
-    try {
-      const [res] = await Promise.all([
-        fetch(API_ROUTES.roulette, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            query: query || null,
-            filters: { ...filters, nsfw: settings.allowNsfw },
-            seen_ids: currSeen,
-            session_id: currentSession,
-            limit: 40
-          })
-        }),
-        minDelayPromise
-      ]);
-      if (!isCurrent()) return null;
-      if (res.status === 404) {
-        // Nothing matches the filters. Say it once instead of drawing forever.
-        setSurpriseExhausted(true);
-        return null;
-      }
-      if (!res.ok) throw new Error(`roulette request failed: ${res.status}`);
-      const data = await res.json();
-      if (!isCurrent()) return null;
-      return data;
-    } catch (err) {
-      if (err.name === 'AbortError' || !isCurrent()) return null;
-      console.error('Failed to draw roulette recommendation:', err);
-      setSurpriseError('Could not reach the recommendation service.');
-      return null;
-    } finally {
-      if (isCurrent()) setLoadingSurprise(false);
-    }
-  };
-
-  // Single-flight: the tab effect and the view's own fallback both call this on
-  // a deep link or a Back navigation, and both used to POST. A second non-forced
-  // call now joins the request that is already in flight.
-  const handleSurpriseMe = (forceFresh = false) => {
-    if (!forceFresh && surpriseInFlightRef.current) return surpriseInFlightRef.current;
-    if (forceFresh) {
-      // A fresh draw starts a new queue and a new session; the key remount is
-      // what resets the view's presentation index.
-      setSurpriseQueue([]);
-      seenRouletteIdsRef.current = [];
-      sessionIdRef.current = newSessionId();
-      setSurpriseKey(k => k + 1);
-    }
-    const promise = runSurprise(forceFresh)
-      .then(row => {
-        if (row) appendSurpriseRows([row]);
-        return row;
-      })
-      .finally(() => {
-        if (surpriseInFlightRef.current === promise) surpriseInFlightRef.current = null;
-      });
-    surpriseInFlightRef.current = promise;
-    return promise;
-  };
-
-  // The view asks for more; it never fetches or dedupes on its own (FE-10).
-  const fetchRouletteBatch = async (count = 5) => {
-    try {
-      const res = await fetch(API_ROUTES.rouletteBatch, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          filters: { ...filters, nsfw: settings.allowNsfw },
-          seen_ids: seenRouletteIdsRef.current,
-          session_id: sessionIdRef.current,
-          count: count
-        })
-      });
-      if (!res.ok) throw new Error(`roulette batch failed: ${res.status}`);
-      const items = await res.json();
-      return appendSurpriseRows(items) > 0 ? items : [];
-    } catch (err) {
-      console.error('Failed to fetch roulette batch:', err);
-      return [];
-    }
-  };
+  // FE-29: the Surprise Me queue - rows, seen ids, session, single-flight draw,
+  // batch refill and the two invalidation effects - is one hook.
+  const {
+    queue: surpriseQueue,
+    loading: loadingSurprise,
+    key: surpriseKey,
+    error: surpriseError,
+    exhausted: surpriseExhausted,
+    draw: handleSurpriseMe,
+    fetchBatch: fetchRouletteBatch
+  } = useSurprise({
+    activeTab,
+    beginRequest,
+    filters,
+    query,
+    allowNsfw: settings.allowNsfw
+  });
 
   // Combined tab navigation and re-click to re-roll
   const handleTabClick = (tabId) => {
@@ -297,31 +170,6 @@ export default function App() {
       }
     }
   };
-
-  useEffect(() => {
-    if (activeTab === 'surprise' && surpriseQueue.length === 0 && !loadingSurprise) {
-      handleSurpriseMe();
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, surpriseQueue.length]);
-
-  // A filter change invalidates the queue: the queued titles were drawn under
-  // the old filters. This used to live in the view (debounced, and each copy
-  // reset a different half of the state); the queue owner has to reset it.
-  const filtersSignature = JSON.stringify(filters);
-  const filtersMountedRef = useRef(false);
-  useEffect(() => {
-    if (!filtersMountedRef.current) {
-      filtersMountedRef.current = true;
-      return;
-    }
-    if (activeTab !== 'surprise') return;
-    const timer = setTimeout(() => handleSurpriseMe(true), 400);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filtersSignature, activeTab]);
-
-
 
   // FE-29: the DOM attributes and the storage write moved into useSettings with
   // the value they belong to.
