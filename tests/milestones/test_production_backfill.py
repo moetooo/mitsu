@@ -25,15 +25,23 @@ pytestmark = pytest.mark.requires_artifacts
 
 from app.enrichment.models import InferredTag, merge_inferred_tags
 from app.enrichment.vocabulary import CANONICAL_VOCABULARY, get_tag_by_slug
-from scripts.prepare_production_backfill import (
-    load_and_filter_candidates,
-    merge_and_deduplicate,
-    select_deterministic_pilot
+
+# `scripts/` is gitignored, so on a clean checkout (CI) there is nothing to import.
+# The `requires_artifacts` marker alone cannot help: it is checked at setup, while
+# the ImportError happens during collection. Skip at module level instead.
+_prepare = pytest.importorskip(
+    "scripts.prepare_production_backfill",
+    reason="scripts/ is a local campaign artifact and is not tracked",
 )
-from scripts.backfill_inferred_tags import (
-    validate_and_load_input,
-    execute_backfill
+_backfill = pytest.importorskip(
+    "scripts.backfill_inferred_tags",
+    reason="scripts/ is a local campaign artifact and is not tracked",
 )
+load_and_filter_candidates = _prepare.load_and_filter_candidates
+merge_and_deduplicate = _prepare.merge_and_deduplicate
+select_deterministic_pilot = _prepare.select_deterministic_pilot
+validate_and_load_input = _backfill.validate_and_load_input
+execute_backfill = _backfill.execute_backfill
 
 
 def test_safe_only_enforcement_and_heuristic_exclusion():

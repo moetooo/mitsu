@@ -1,10 +1,12 @@
+name: mitsu
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: user
       POSTGRES_PASSWORD: password
-      POSTGRES_DB: mangamind
+      POSTGRES_DB: mitsu
     ports:
       - "5433:5432"
     shm_size: '1gb'
@@ -19,5 +21,7 @@ services:
 
 volumes:
   postgres_data:
+    # Kept external on purpose: the catalogue is the only copy of the data, and
+    # `docker compose down -v` must not be able to delete it.
     external: true
-    name: recommend_tool_postgres_data
+    name: mitsu_postgres_data

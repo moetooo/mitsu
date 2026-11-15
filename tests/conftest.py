@@ -10,7 +10,7 @@ the test database is empty instead of asserting against whatever happens to be
 in the developer's database. Point `MITSU_TEST_DATABASE_URL` at a disposable
 copy of a real catalog (for example a restored dump) to run them locally:
 
-    createdb -T mangamind mitsu_catalog
+    createdb -T mitsu mitsu_catalog
     MITSU_TEST_DATABASE_URL=postgresql+asyncpg://user:password@localhost:5433/mitsu_catalog pytest
 
 A database supplied that way is never truncated by the suite.
@@ -34,7 +34,7 @@ from sqlalchemy.ext.asyncio import create_async_engine
 # from the same DATABASE_URL the application would use.
 load_dotenv()
 
-_DEFAULT_DATABASE_URL = "postgresql+asyncpg://user:password@localhost:5432/mangamind"
+_DEFAULT_DATABASE_URL = "postgresql+asyncpg://user:password@localhost:5433/mitsu"
 
 
 def _test_database_url() -> str:
@@ -187,6 +187,17 @@ def artifacts_available() -> bool:
     return (root / "scratch").is_dir() and (root / "scripts").is_dir()
 
 
+def dashboard_available() -> bool:
+    """True when the dashboard shell has been built.
+
+    `app/static/dashboard/` is a build artifact (`.gitignore`), so a clean
+    checkout does not have it and `/admin/dashboard` answers 503 by design. The
+    tests that exercise the shell skip with that reason instead of failing CI.
+    """
+    root = Path(__file__).resolve().parent.parent
+    return (root / "app" / "static" / "dashboard" / "dashboard.html").is_file()
+
+
 @pytest.fixture(scope="session", autouse=True)
 def test_database() -> str:
     _bootstrap_database()
@@ -198,6 +209,11 @@ def pytest_runtest_setup(item):
         pytest.skip(
             "requires a populated catalog; set MITSU_TEST_DATABASE_URL to a "
             "prepared test database to run this test"
+        )
+    if "requires_dashboard" in item.keywords and not dashboard_available():
+        pytest.skip(
+            "requires the dashboard build in app/static/dashboard/; run "
+            "`npm run build:dashboard` in frontend/ (the build is gitignored)"
         )
     if "requires_artifacts" in item.keywords and not artifacts_available():
         pytest.skip(

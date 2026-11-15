@@ -18,7 +18,12 @@ from app.enrichment.external_gap_mapper import (
     classify_format_candidate,
     resolve_format_from_script
 )
-import scripts.dry_run_external_enrichment as dry_run_module
+# `scripts/` is gitignored: skip at collection time, because the marker is only
+# checked at setup and the ImportError would abort the whole run.
+dry_run_module = pytest.importorskip(
+    "scripts.dry_run_external_enrichment",
+    reason="scripts/ is a local campaign artifact and is not tracked",
+)
 
 
 def test_dry_run_flag_and_no_write_guarantee():

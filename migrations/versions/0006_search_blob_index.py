@@ -35,7 +35,7 @@ from __future__ import annotations
 from alembic import op
 import sqlalchemy as sa
 
-from migrations.helpers import index_exists
+from migrations.helpers import ensure_alt_titles_function, index_exists
 
 revision = "0006_search_blob_index"
 down_revision = "0005_format_type"
@@ -55,16 +55,7 @@ SEARCH_BLOB_SQL = (
 
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-    op.execute(
-        f"""
-        CREATE OR REPLACE FUNCTION {FUNCTION_NAME}(text[])
-        RETURNS text
-        LANGUAGE sql
-        IMMUTABLE
-        PARALLEL SAFE
-        AS $$ SELECT array_to_string($1, ' ') $$
-        """
-    )
+    ensure_alt_titles_function()
 
     if index_exists(INDEX_NAME):
         return

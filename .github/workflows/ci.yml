@@ -9,21 +9,36 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Read-only by default: neither job writes to the repository.
+permissions:
+  contents: read
+
+env:
+  # Behaviour, not secrets. Everything that is sensitive comes from repository
+  # secrets and is masked in the log (see "Mask credentials" below), so neither
+  # job prints a token, a password or a connection string.
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PIP_NO_INPUT: "1"
+
 jobs:
   backend:
     name: Backend (pytest)
     runs-on: ubuntu-latest
+    # A hung test used to hold the runner for the default 6 hours.
+    timeout-minutes: 25
     services:
       postgres:
         image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: user
           POSTGRES_PASSWORD: password
-          POSTGRES_DB: mangamind
+          POSTGRES_DB: mitsu
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U user -d mangamind"
+          --health-cmd "pg_isready -U user -d mitsu"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
@@ -37,53 +52,119 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/mangamind
+      DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/mitsu
       REDIS_URL: redis://localhost:6379/0
-      SYNC_ADMIN_TOKEN: ci-admin-token
       HF_HUB_DISABLE_TELEMETRY: "1"
+      # Prefer the repository secret. The fallback keeps pull requests from forks
+      # (which cannot read secrets) green without weakening the admin surface:
+      # every test that needs authentication sets its own token.
+      SYNC_ADMIN_TOKEN: ${{ secrets.SYNC_ADMIN_TOKEN || 'ci-admin-token' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.13"
           cache: pip
+          cache-dependency-path: requirements.txt
+
+      # GitHub redacts repository secrets automatically, but the fallback value
+      # is not a secret, so it is masked explicitly. No step below echoes env.
+      - name: Mask credentials in the log
+        run: echo "::add-mask::$SYNC_ADMIN_TOKEN"
+
+      - name: Cache the embedding model
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/huggingface
+          key: hf-${{ runner.os }}-${{ hashFiles('requirements.txt') }}
+          restore-keys: hf-${{ runner.os }}-
 
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # tests/conftest.py creates and owns a separate `mangamind_test` database,
-      # so the suite never touches the application database. Catalog-dependent
-      # tests skip on the empty test database by design.
+      # tests/conftest.py creates `mitsu_test` and brings it to `alembic upgrade
+      # head`, but it never drops an existing database. On a developer machine
+      # that hides a broken migration: `create_all` sees the tables and the
+      # revision short-circuits, so a first-install failure only ever shows up
+      # here. Dropping it makes CI do what a fresh deployment does.
+      - name: Drop the test database so migrations run from scratch
+        run: |
+          python - <<'PY'
+          import asyncio
+
+          import asyncpg
+
+
+          async def main() -> None:
+              conn = await asyncpg.connect(
+                  user="user",
+                  password="password",
+                  host="localhost",
+                  database="mitsu",
+              )
+              await conn.execute("DROP DATABASE IF EXISTS mitsu_test")
+              await conn.close()
+
+
+          asyncio.run(main())
+          PY
+
       - name: Run tests
-        run: pytest -q
+        run: pytest -q --cov-report=xml
+
+      - name: Check migrations match the models
+        env:
+          ALEMBIC_DATABASE_URL: postgresql+asyncpg://user:password@localhost:5432/mitsu_test
+        run: python -m alembic check
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
 
   frontend:
-    name: Frontend (lint + builds)
+    name: Frontend (lint + test + builds)
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
       - name: Install dependencies
-        run: npm ci
+        run: npm ci --no-audit --no-fund
 
       - name: Lint
-        # Errors fail the build. The 19 remaining react-hooks warnings are
-        # tracked findings (FE-03/FE-05/FE-12); tighten to --max-warnings 0 once
-        # they are fixed.
+        # Errors fail the build. The remaining react-hooks warnings are tracked
+        # findings (FE-03/FE-05/FE-12); `oxlint v1` does not enforce
+        # --max-warnings, so the contract stays "zero errors" until they are
+        # fixed and the flag can be added honestly.
         run: npm run lint
+
+      # The unit tests existed but were never run here, so a regression in them
+      # could not fail CI. They cover the dialog focus trap and storage
+      # migration (Stage 9A).
+      - name: Run unit tests
+        run: npm test
 
       - name: Build app
         run: npm run build
 
+      # Also an artefact the backend reads: /admin/dashboard answers 503 without
+      # it, which is why tests/test_dashboard*.py carry `requires_dashboard`.
       - name: Build dashboard
         run: npm run build:dashboard
+
+      - name: Verify the dashboard artefact exists
+        run: test -f ../app/static/dashboard/dashboard.html

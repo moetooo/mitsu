@@ -16,6 +16,36 @@ def _scalar(sql: str, **params):
     return op.get_bind().execute(sa.text(sql), params).scalar()
 
 
+#: SQL for the IMMUTABLE wrapper the search-blob index expression calls.
+#: `array_to_string` is STABLE, so it cannot appear in an index expression;
+#: this wrapper is the one place that fact is encoded. Kept here because two
+#: revisions need it: 0001 creates the index indirectly (through live metadata),
+#: and 0006 creates it explicitly.
+ALT_TITLES_FUNCTION_SQL = """
+CREATE OR REPLACE FUNCTION mitsu_alt_titles_text(text[])
+RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$ SELECT array_to_string($1, ' ') $$
+"""
+
+
+def ensure_alt_titles_function() -> None:
+    """Create `mitsu_alt_titles_text` if it does not exist (idempotent).
+
+    `0001_baseline` builds every table from the *current* models, and `Manga`'s
+    metadata declares `idx_manga_search_blob_trgm`, whose expression calls this
+    function. A fresh database therefore needs the function before
+    `create_all()` runs, even though the index is nominally revision 0006's.
+    Without this, `alembic upgrade head` on an empty database fails with
+    `function mitsu_alt_titles_text(text[]) does not exist` - invisible on a
+    developer database where the index already exists, so `create_all` is a
+    no-op and 0006 returns early.
+    """
+    op.execute(ALT_TITLES_FUNCTION_SQL)
+
+
 def column_exists(table: str, column: str) -> bool:
     return bool(_scalar(
         """

@@ -68,6 +68,7 @@ async def test_sync_admin_token_is_enforced(client, monkeypatch):
     assert response.status_code == 200
 
 
+@pytest.mark.requires_dashboard
 @pytest.mark.asyncio
 async def test_dashboard_serves_login_shell(client, admin_headers):
     """The shell renders signed out, but the admin surface still reports closed."""
