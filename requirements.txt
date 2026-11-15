@@ -26,6 +26,13 @@ tokenizers==0.22.1
 numpy==2.3.5
 groq==1.0.0
 
+# Tag classifier: the model is loaded through joblib and built on sklearn. Both
+# were installed ad hoc in the development venv and were missing here, which is
+# exactly what broke the first CI run on every module that imports
+# `app.enrichment` (ml_classifier.py imports both at module level).
+joblib==1.5.3
+scikit-learn==1.9.0
+
 # Cache / HTTP
 redis==8.1.0
 httpx==0.28.1
