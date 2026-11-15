@@ -9,9 +9,9 @@ import HeroBanner from './components/HeroBanner';
 import BackToTop from './components/BackToTop';
 import { API_ROUTES } from './config';
 import { readJSON, writeJSON } from './utils/storage';
-import { normalizeSettings, clampLimit } from './utils/settings';
 import { loadVocabulary, FALLBACK_GROUPS, FALLBACK_FORMATS } from './utils/vocabulary';
 import { toggleBookmark, toStoredBookmarks } from './utils/bookmarks';
+import useSettings from './hooks/useSettings';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
 const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
@@ -90,19 +90,8 @@ export default function App() {
   const MAX_SEEN_IDS = 200;
   const seenRouletteIdsRef = useRef([]);
 
-  // FE-18: guarded read. FE-22: normalised, so a corrupted or hand-edited blob
-  // cannot put an unknown theme, an unknown grid size or a limit of 999,999 into
-  // a request body.
-  const [settings, setSettings] = useState(() =>
-    normalizeSettings(readJSON(['mitsu_settings', 'mangamind_settings'], null))
-  );
-  // Every writer goes through the same normaliser (the settings modal, the
-  // preset buttons), so state never holds an unvalidated value.
-  const updateSettings = (updater) => {
-    setSettings(prev => normalizeSettings(typeof updater === 'function' ? updater(prev) : updater));
-  };
-  // FE-22, belt and braces: what the request bodies use, clamped at the call site.
-  const requestLimit = clampLimit(settings.limit);
+  // FE-29: preferences, their DOM attributes and their persistence are one hook.
+  const { settings, updateSettings, requestLimit } = useSettings();
 
   // FE-23: genres, themes and formats come from the served vocabulary. The frozen
   // fallback is what the drawer renders before the request lands (or if it fails),
@@ -438,13 +427,10 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    document.documentElement.setAttribute('data-theme', settings?.theme || 'sumi');
-    document.documentElement.setAttribute('data-title-font', settings?.fontStyle || 'serif');
-    document.documentElement.setAttribute('data-accent', settings?.accent || settings?.hoverAccent || 'vermillion');
-    if (settings) writeJSON('mitsu_settings', settings);
-  }, [settings]);
+  // FE-29: the DOM attributes and the storage write moved into useSettings with
+  // the value they belong to.
 
+  // FE-18: bookmarks persistence stays here until useBookmarks owns it.
   useEffect(() => {
     if (Array.isArray(bookmarks)) writeJSON('mitsu_bookmarks', toStoredBookmarks(bookmarks));
   }, [bookmarks]);
