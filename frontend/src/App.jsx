@@ -12,6 +12,7 @@ import { loadVocabulary, FALLBACK_GROUPS, FALLBACK_FORMATS } from './utils/vocab
 import useSettings from './hooks/useSettings';
 import useBookmarks from './hooks/useBookmarks';
 import useTabRouting from './hooks/useTabRouting';
+import useTrending from './hooks/useTrending';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
 const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
@@ -43,6 +44,7 @@ const newSessionId = () =>
 export default function App() {
   // FE-29: tab state, the URL that mirrors it and Back/Forward live in one hook.
   const { activeTab, setActiveTab, pushTab } = useTabRouting();
+
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [mangas, setMangas] = useState([]);
@@ -111,7 +113,6 @@ export default function App() {
   // FE-25: "no titles found" and "the request failed" are different answers, and
   // the grid used to give the first for both. One message per fetch path.
   const [searchError, setSearchError] = useState(null);
-  const [trendingError, setTrendingError] = useState(null);
   // FE-15: identity of what is on screen. The grid resets its sort pill when it
   // changes, and keeps it when the same set just grows by a page.
   const [searchResultKey, setSearchResultKey] = useState('');
@@ -120,16 +121,6 @@ export default function App() {
   const { bookmarks, toggleBookmark: handleToggleBookmark, clearBookmarks, isBookmarked } =
     useBookmarks();
 
-  // Trending Section Divided State & Filters
-  const [trendingFormat, setTrendingFormat] = useState('all'); // 'all' | 'manga' | 'manhwa' | 'manhua'
-  const [trendingGenre, setTrendingGenre] = useState('all'); // 'all' | 'Action' | 'Fantasy' | ...
-  const [trendingPage, setTrendingPage] = useState(1);
-  const [trendingMangas, setTrendingMangas] = useState([]);
-  const [loadingTrending, setLoadingTrending] = useState(false);
-  // Starts false: the sentinel only exists once page 1 has said there is more.
-  // It used to start true, so the observer could ask for page 2 while page 1 was
-  // still in flight and spend an AniList request nobody needed.
-  const [hasMoreTrending, setHasMoreTrending] = useState(false);
 
   // FE-17: the session id lived in state *and* a ref that mirrored it, so the
   // state was write-only. The ref is the single owner.
@@ -141,9 +132,10 @@ export default function App() {
   const requestRef = useRef({ search: 0, trending: 0, surprise: 0 });
   const abortRef = useRef({ search: null, trending: null, surprise: null });
   const surpriseInFlightRef = useRef(null);
-  // One in-flight load-more per feed. The sentinel and the virtualized list's
-  // row callback can both fire, and neither should spend a second request.
-  const loadMoreInFlightRef = useRef({ search: false, trending: false });
+  // One in-flight load-more for the Explore feed. The sentinel and the
+  // virtualized list's row callback can both fire, and neither should spend a
+  // second request. (Trending keeps its own inside useTrending.)
+  const loadMoreInFlightRef = useRef({ search: false });
   // Set when the roulette answers 404: nothing matches the current filters.
   const [surpriseExhausted, setSurpriseExhausted] = useState(false);
 
@@ -154,6 +146,23 @@ export default function App() {
     const seq = ++requestRef.current[channel];
     return { controller, isCurrent: () => requestRef.current[channel] === seq };
   };
+
+  // FE-29: the Trending feed, its pills and its paging are one hook. The names are
+  // kept local so the JSX below reads the same as it did.
+  const {
+    mangas: trendingMangas,
+    loading: loadingTrending,
+    hasMore: hasMoreTrending,
+    error: trendingError,
+    format: trendingFormat,
+    setFormat: setTrendingFormat,
+    genre: trendingGenre,
+    setGenre: setTrendingGenre,
+    loadMore: handleLoadMoreTrending,
+    refresh: refreshTrending,
+    fetchPage: fetchTrendingData,
+    resultKey: trendingResultKey
+  } = useTrending({ activeTab, beginRequest });
 
   // Falsy rows are dropped here, at insertion, not in the view: a hole in the
   // queue shifts every later offset against currentIndex (FE-28).
@@ -279,11 +288,8 @@ export default function App() {
         // Aesthetic re-roll / fresh start
         handleSurpriseMe(true);
       } else if (tabId === 'trending') {
-        // The row list is replaced from page 1, so the counter goes back with it;
-        // otherwise the next load-more asks for page N+1 over a page-1 list.
-        setTrendingPage(1);
-        setHasMoreTrending(true);
-        fetchTrendingData(1, false);
+        // The row list is replaced from page 1, so the counter goes back with it.
+        refreshTrending();
       } else if (tabId === 'explore' || tabId === 'bookmarks') {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
@@ -318,71 +324,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtersSignature, activeTab]);
 
-  const fetchTrendingData = async (pageNum = 1, append = false) => {
-    if (activeTab !== 'trending') return false;
-    const { controller, isCurrent } = beginRequest('trending');
-    setLoadingTrending(true);
-    if (pageNum === 1) setTrendingError(null);
 
-    const limit = 12;
-    const formatParam = trendingFormat !== 'all' ? `&format_type=${trendingFormat}` : '';
-    const genreParam = trendingGenre !== 'all' ? `&genre=${encodeURIComponent(trendingGenre)}` : '';
-
-    const url = API_ROUTES.trending(pageNum, limit, formatParam, genreParam);
-
-    try {
-      const res = await fetch(url, { signal: controller.signal });
-      if (!res.ok) throw new Error(`trending request failed: ${res.status}`);
-      const data = await res.json();
-      if (!isCurrent()) return false;
-
-      const results = Array.isArray(data) ? data : [];
-      if (pageNum === 1 && !append) {
-        setTrendingMangas(results);
-      } else {
-        setTrendingMangas(prev => {
-          const existingIds = new Set(prev.map(m => m.id));
-          const uniqueNew = results.filter(m => !existingIds.has(m.id));
-          return [...prev, ...uniqueNew];
-        });
-      }
-      setHasMoreTrending(results.length >= limit);
-      return true;
-    } catch (err) {
-      // A cancelled request is expected, not an error. A failed page leaves
-      // hasMoreTrending alone and reports false so the page counter stays put.
-      if (err.name === 'AbortError') return false;
-      console.error('Trending fetch error:', err);
-      if (isCurrent() && pageNum === 1) {
-        setTrendingError('The catalogue did not answer. Try again in a moment.');
-        setTrendingMangas([]);
-      }
-      return false;
-    } finally {
-      if (isCurrent()) setLoadingTrending(false);
-    }
-  };
-
-  useEffect(() => {
-    if (activeTab === 'trending') {
-      setTrendingPage(1);
-      fetchTrendingData(1, false);
-    }
-  }, [activeTab, trendingFormat, trendingGenre]);
-
-  const handleLoadMoreTrending = async () => {
-    if (loadMoreInFlightRef.current.trending) return;
-    loadMoreInFlightRef.current.trending = true;
-    const nextPage = trendingPage + 1;
-    // The counter only moves once the page actually arrived. Advancing it first
-    // meant one failed request permanently skipped a page nobody ever saw.
-    try {
-      const ok = await fetchTrendingData(nextPage, true);
-      if (ok) setTrendingPage(nextPage);
-    } finally {
-      loadMoreInFlightRef.current.trending = false;
-    }
-  };
 
   // FE-29: the DOM attributes and the storage write moved into useSettings with
   // the value they belong to.
@@ -712,7 +654,7 @@ export default function App() {
               onRetry={() => fetchTrendingData(1, false)}
             />
             <MangaGrid
-              resultKey={`trending:${trendingFormat}:${trendingGenre}`}
+              resultKey={trendingResultKey}
               mangas={trendingMangas}
               loading={loadingTrending}
               hasSearched={true}
