@@ -13,6 +13,7 @@ import useSettings from './hooks/useSettings';
 import useBookmarks from './hooks/useBookmarks';
 import useTabRouting from './hooks/useTabRouting';
 import useTrending from './hooks/useTrending';
+import useSearch from './hooks/useSearch';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
 const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
@@ -45,14 +46,7 @@ export default function App() {
   // FE-29: tab state, the URL that mirrors it and Back/Forward live in one hook.
   const { activeTab, setActiveTab, pushTab } = useTabRouting();
 
-  const [query, setQuery] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [mangas, setMangas] = useState([]);
   const [selectedManga, setSelectedManga] = useState(null);
-  const [searched, setSearched] = useState(false);
-  // "Did you mean <title>?" -- offered beside thematic results, never instead
-  // of them. The API only sends this for a query that is not an exact title.
-  const [titleSuggestion, setTitleSuggestion] = useState(null);
 
   const [filters, setFilters] = useState(INITIAL_FILTERS);
   const [isFilterOpen, setIsFilterOpen] = useState(false);
@@ -107,15 +101,6 @@ export default function App() {
 
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(false);
-
-  // FE-25: "no titles found" and "the request failed" are different answers, and
-  // the grid used to give the first for both. One message per fetch path.
-  const [searchError, setSearchError] = useState(null);
-  // FE-15: identity of what is on screen. The grid resets its sort pill when it
-  // changes, and keeps it when the same set just grows by a page.
-  const [searchResultKey, setSearchResultKey] = useState('');
 
   // FE-29: saved titles, their projection/cap and their persistence are one hook.
   const { bookmarks, toggleBookmark: handleToggleBookmark, clearBookmarks, isBookmarked } =
@@ -132,10 +117,6 @@ export default function App() {
   const requestRef = useRef({ search: 0, trending: 0, surprise: 0 });
   const abortRef = useRef({ search: null, trending: null, surprise: null });
   const surpriseInFlightRef = useRef(null);
-  // One in-flight load-more for the Explore feed. The sentinel and the
-  // virtualized list's row callback can both fire, and neither should spend a
-  // second request. (Trending keeps its own inside useTrending.)
-  const loadMoreInFlightRef = useRef({ search: false });
   // Set when the roulette answers 404: nothing matches the current filters.
   const [surpriseExhausted, setSurpriseExhausted] = useState(false);
 
@@ -163,6 +144,22 @@ export default function App() {
     fetchPage: fetchTrendingData,
     resultKey: trendingResultKey
   } = useTrending({ activeTab, beginRequest });
+
+  // FE-29: the Explore feed - query, rows, page counter, suggestion - is one hook.
+  const {
+    query,
+    setQuery,
+    loading,
+    mangas,
+    searched,
+    titleSuggestion,
+    hasMore,
+    error: searchError,
+    resultKey: searchResultKey,
+    search: handleSearch,
+    loadMore: handleLoadMore,
+    searchForTag
+  } = useSearch({ beginRequest, requestLimit, allowNsfw: settings.allowNsfw });
 
   // Falsy rows are dropped here, at insertion, not in the view: a hole in the
   // queue shifts every later offset against currentIndex (FE-28).
@@ -354,89 +351,13 @@ export default function App() {
     filters.format_type ? 1 : 0
   ].reduce((a, b) => a + b, 0);
 
-  const handleSearch = async (e, customQuery = null, pageNum = 1, customFilters = null) => {
-    if (e) e.preventDefault();
-    const searchQuery = customQuery !== null ? customQuery : query;
-    const activeFilters = customFilters !== null ? customFilters : filters;
-    if (!searchQuery.trim()) return false;
-
-    const { controller, isCurrent } = beginRequest('search');
-    setLoading(true);
-    setSearched(true);
-    setSearchError(null);
-    if (pageNum === 1) {
-      setPage(1);
-      setSearchResultKey(`${searchQuery}|${JSON.stringify(activeFilters)}`);
-    }
-
-    try {
-      const res = await fetch(API_ROUTES.recommend, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        signal: controller.signal,
-        body: JSON.stringify({
-          query: searchQuery,
-          filters: { ...activeFilters, nsfw: settings.allowNsfw },
-          limit: requestLimit,
-          page: pageNum
-        })
-      });
-      if (!res.ok) throw new Error(`recommend request failed: ${res.status}`);
-      const data = await res.json();
-      // A superseded page must not append: it would duplicate or reorder rows.
-      if (!isCurrent()) return false;
-
-      const newResults = data.results || [];
-      if (pageNum === 1) {
-        setMangas(newResults);
-        // A suggestion belongs to page 1 only; later pages must not resurrect it.
-        setTitleSuggestion(data.title_suggestion || null);
-      } else {
-        setMangas(prev => {
-          const existingIds = new Set(prev.map(m => m.id));
-          const uniqueNew = newResults.filter(m => !existingIds.has(m.id));
-          return [...prev, ...uniqueNew];
-        });
-      }
-
-      setHasMore(newResults.length >= requestLimit);
-      return true;
-    } catch (err) {
-      if (err.name === 'AbortError') return false;
-      console.error('Search error:', err);
-      if (isCurrent()) {
-        setSearchError('The recommendation service did not answer. The titles you saw before are still here.');
-        // A failed first page must not leave the previous query's rows on screen
-        // as if they were this query's results.
-        if (pageNum === 1) setMangas([]);
-      }
-      return false;
-    } finally {
-      if (isCurrent()) setLoading(false);
-    }
-  };
-
   // Option B: Search triggers strictly on explicit Enter keypress or Search button submission.
   // Debounced auto-search on typing has been removed.
 
-  const handleLoadMore = async () => {
-    if (loadMoreInFlightRef.current.search) return;
-    loadMoreInFlightRef.current.search = true;
-    const nextPage = page + 1;
-    try {
-      const ok = await handleSearch(null, query, nextPage, filters);
-      if (ok) setPage(nextPage);
-    } finally {
-      loadMoreInFlightRef.current.search = false;
-    }
-  };
-
   const handleTagClick = (tag) => {
-    const tagQuery = `#${tag}`;
-    setQuery(tagQuery);
     setSelectedManga(null);
     pushTab('explore');
-    handleSearch(null, tagQuery, 1, filters);
+    searchForTag(tag, filters);
   };
 
   return (
@@ -560,7 +481,7 @@ export default function App() {
                 hoverAccent={settings.hoverAccent || 'vermillion'}
                 nsfwBlur={settings.nsfwBlur !== false}
                 hasMore={hasMore}
-                onLoadMore={handleLoadMore}
+                onLoadMore={() => handleLoadMore(filters)}
                 infiniteScroll={false}
               />
             </main>
