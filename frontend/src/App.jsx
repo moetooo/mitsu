@@ -11,6 +11,7 @@ import { API_ROUTES } from './config';
 import { loadVocabulary, FALLBACK_GROUPS, FALLBACK_FORMATS } from './utils/vocabulary';
 import useSettings from './hooks/useSettings';
 import useBookmarks from './hooks/useBookmarks';
+import useTabRouting from './hooks/useTabRouting';
 
 // Feature 75: Lazy-Load Heavy Modals (React.lazy + Suspense dynamic bundle code-splitting)
 const FilterDrawer = lazy(() => import('./components/FilterDrawer'));
@@ -32,36 +33,16 @@ const INITIAL_FILTERS = {
 };
 
 
-const VALID_TABS = ['explore', 'trending', 'surprise', 'bookmarks'];
-
+// A per-draw session id: the roulette dedupes by session, so a fresh draw starts
+// a new one. (FE-29 leaves this with the discovery queue it belongs to.)
 const newSessionId = () =>
   (typeof crypto !== 'undefined' && crypto.randomUUID
     ? crypto.randomUUID()
     : 'session_' + Math.random().toString(36).substring(2, 9));
 
-const getTabFromPath = (path) => {
-  const clean = (path || '').replace(/^\/+|\/+$/g, '').split('/')[0].toLowerCase();
-  return VALID_TABS.includes(clean) ? clean : 'explore';
-};
-
-const getInitialTab = () => {
-  if (typeof window !== 'undefined') {
-    // Graceful backward-compatibility cleanup if arriving via legacy '#tab'
-    if (window.location.hash) {
-      const hash = window.location.hash.replace('#', '').toLowerCase();
-      if (VALID_TABS.includes(hash)) {
-        const cleanPath = hash === 'explore' ? '/' : `/${hash}`;
-        window.history.replaceState({ tab: hash }, '', cleanPath);
-        return hash;
-      }
-    }
-    return getTabFromPath(window.location.pathname);
-  }
-  return 'explore';
-};
-
 export default function App() {
-  const [activeTab, setActiveTab] = useState(getInitialTab);
+  // FE-29: tab state, the URL that mirrors it and Back/Forward live in one hook.
+  const { activeTab, setActiveTab, pushTab } = useTabRouting();
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [mangas, setMangas] = useState([]);
@@ -290,24 +271,6 @@ export default function App() {
     }
   };
 
-  // Listen for browser Back/Forward navigation (popstate)
-  useEffect(() => {
-    const handlePopState = () => {
-      const tab = getTabFromPath(window.location.pathname);
-      setActiveTab(tab);
-    };
-    window.addEventListener('popstate', handlePopState);
-    return () => window.removeEventListener('popstate', handlePopState);
-  }, []);
-
-  // Keep active tab synced to clean URL path without '#'
-  useEffect(() => {
-    const targetPath = activeTab === 'explore' ? '/' : `/${activeTab}`;
-    if (window.location.pathname !== targetPath || window.location.hash) {
-      window.history.replaceState({ tab: activeTab }, '', targetPath);
-    }
-  }, [activeTab]);
-
   // Combined tab navigation and re-click to re-roll
   const handleTabClick = (tabId) => {
     if (tabId === activeTab) {
@@ -325,9 +288,7 @@ export default function App() {
         window.scrollTo({ top: 0, behavior: 'smooth' });
       }
     } else {
-      setActiveTab(tabId);
-      const targetPath = tabId === 'explore' ? '/' : `/${tabId}`;
-      window.history.pushState({ tab: tabId }, '', targetPath);
+      pushTab(tabId);
       if (tabId === 'surprise') {
         handleSurpriseMe(true);
       }
@@ -532,8 +493,7 @@ export default function App() {
     const tagQuery = `#${tag}`;
     setQuery(tagQuery);
     setSelectedManga(null);
-    setActiveTab('explore');
-    window.history.pushState({ tab: 'explore' }, '', '/');
+    pushTab('explore');
     handleSearch(null, tagQuery, 1, filters);
   };
 
