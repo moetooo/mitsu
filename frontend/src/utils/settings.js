@@ -7,42 +7,45 @@
 // limit too (API-04), so this is defence in depth rather than the only guard.
 
 export const DEFAULT_SETTINGS = {
-  theme: 'sumi', // 'sumi' (dark ink) | 'washi' (light paper) | 'amoled'
+  // 'washi' (paper) | 'amoled'. Dark Ink was removed: the paper theme is the
+  // default now, so a blob that still says 'sumi' normalises back to it.
+  theme: 'washi',
   fontStyle: 'serif', // 'serif' | 'sans' | 'mono' | 'display'
-  stampStyle: 'crest',
   gridSize: 'standard',
-  limit: 12,
-  batchSize: 24, // Dynamic load batch size
-  focusStyle: 'glow', // 'glow' | 'vermillion' | 'subtle' | 'none'
-  hoverAccent: 'vermillion', // 'vermillion' | 'gold' | 'emerald' | 'mono' | 'indigo' | 'rose'
-  accent: 'vermillion',
+  // Rose is the site accent. The palette picker is gone, so both values are fixed
+  // here: a blob written by an older build (accent: 'gold') normalises back to rose
+  // instead of leaving one user on a colour the UI can no longer change.
+  hoverAccent: 'rose',
+  accent: 'rose',
   allowNsfw: false, // Global 18+ content permission
   nsfwBlur: true, // Mature/NSFW cover blur safety toggle
-  infiniteScroll: true,
   surpriseImageLength: 60 // Surprise card image length % (30-100)
 };
 
 // Every enum the UI can render. A value outside them falls back to the default,
 // so the CSS attributes and the card maps never receive an unknown key.
 const ENUMS = {
-  theme: ['sumi', 'washi', 'amoled'],
+  theme: ['washi', 'amoled'],
   fontStyle: ['serif', 'sans', 'mono', 'display'],
-  stampStyle: ['crest', 'hanko'],
   gridSize: ['compact', 'standard', 'large'],
-  focusStyle: ['glow', 'vermillion', 'subtle', 'none'],
-  hoverAccent: ['vermillion', 'gold', 'emerald', 'mono', 'indigo', 'rose'],
-  accent: ['vermillion', 'gold', 'emerald', 'mono', 'indigo', 'rose']
+  // `accent`/`hoverAccent` are deliberately absent: they are single values now, so
+  // normalizeSettings ignores whatever an old blob stored and keeps the default.
 };
 
-// The API's own bounds (app/models.py): recommend 1-50, roulette 1-100. The
-// client asks for at most 50 so both requests stay valid with one number.
+// The API's own bounds (app/models.py). The surprise image length is the only
+// numeric preference left: the page size is `PAGE_SIZE`, not a setting.
 export const SETTINGS_RANGES = {
-  limit: { min: 1, max: 50 },
-  batchSize: { min: 1, max: 50 },
   surpriseImageLength: { min: 30, max: 100 }
 };
 
-const BOOLEANS = ['allowNsfw', 'nsfwBlur', 'infiniteScroll'];
+// One page per Load More click, in one place. This used to be two settings
+// (`limit` and `batchSize`) plus a three-button chooser in the modal: two knobs
+// for one question, "how fast do I see more?", and up to four variants of every
+// trending cache key. The number is fixed here; the server still bounds what it
+// will build (`trending.MAX_PAGE_LIMIT` = 48).
+export const PAGE_SIZE = 12;
+
+const BOOLEANS = ['allowNsfw', 'nsfwBlur'];
 
 export function clampNumber(value, { min, max }, fallback) {
   const number = typeof value === 'number' ? value : Number(value);
@@ -50,15 +53,6 @@ export function clampNumber(value, { min, max }, fallback) {
   return Math.min(max, Math.max(min, Math.round(number)));
 }
 
-// What the request bodies use. Anything the user's storage got wrong becomes a
-// valid request instead of a 422.
-export function clampLimit(value) {
-  return clampNumber(value, SETTINGS_RANGES.limit, DEFAULT_SETTINGS.limit);
-}
-
-export function clampBatchSize(value) {
-  return clampNumber(value, SETTINGS_RANGES.batchSize, DEFAULT_SETTINGS.batchSize);
-}
 
 export function normalizeSettings(raw) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};

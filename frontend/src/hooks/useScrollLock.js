@@ -9,6 +9,7 @@ import { useEffect } from 'react';
 // underneath it.
 let lockCount = 0;
 let savedOverflow = '';
+let savedRootOverflow = '';
 
 export default function useScrollLock(active) {
   useEffect(() => {
@@ -16,7 +17,13 @@ export default function useScrollLock(active) {
 
     if (lockCount === 0) {
       savedOverflow = document.body.style.overflow;
+      savedRootOverflow = document.documentElement.style.overflow;
       document.body.style.overflow = 'hidden';
+      // `index.css` gives <html> `overflow-y: scroll` so the gutter never jumps.
+      // With an explicit root overflow the body lock alone does not stop the
+      // page: the root keeps its own scroll container, so a wheel over the
+      // backdrop scrolled the page behind the settings panel. Lock both.
+      document.documentElement.style.overflow = 'hidden';
     }
     lockCount += 1;
 
@@ -25,7 +32,9 @@ export default function useScrollLock(active) {
       if (lockCount <= 0) {
         lockCount = 0;
         document.body.style.overflow = savedOverflow;
+        document.documentElement.style.overflow = savedRootOverflow;
         savedOverflow = '';
+        savedRootOverflow = '';
       }
     };
   }, [active]);
@@ -36,5 +45,7 @@ export default function useScrollLock(active) {
 export function __resetScrollLockForTests() {
   lockCount = 0;
   savedOverflow = '';
+  savedRootOverflow = '';
   document.body.style.overflow = '';
+  document.documentElement.style.overflow = '';
 }

@@ -41,7 +41,11 @@ export default function useSurprise({ activeTab, beginRequest, filters, query, a
   const seenIdsRef = useRef([]);
   const sessionIdRef = useRef(newSessionId());
   const inFlightRef = useRef(null);
-  const filtersMountedRef = useRef(false);
+  // B-05: the signature the queue was drawn under. Entering the tab re-runs the
+  // filter effect, and comparing signatures (instead of "have we mounted yet")
+  // is what stops entry from being mistaken for a filter change.
+  const drawnFiltersSignatureRef = useRef(null);
+  const filterDrawPendingRef = useRef(false);
 
   const appendRows = (rows) => {
     const clean = (Array.isArray(rows) ? rows : []).filter((row) => row && row.id != null);
@@ -181,12 +185,25 @@ export default function useSurprise({ activeTab, beginRequest, filters, query, a
   // different half of the state); the queue owner has to reset it.
   const filtersSignature = JSON.stringify(filters);
   useEffect(() => {
-    if (!filtersMountedRef.current) {
-      filtersMountedRef.current = true;
+    if (activeTab !== 'surprise') {
+      // A redraw scheduled here cannot run while the tab is closed. Adopt the
+      // signature only if none was pending, so coming back never leaves a queue
+      // built under filters the user has since changed.
+      if (!filterDrawPendingRef.current) drawnFiltersSignatureRef.current = filtersSignature;
       return undefined;
     }
-    if (activeTab !== 'surprise') return undefined;
-    const timer = setTimeout(() => draw(true), 400);
+    if (drawnFiltersSignatureRef.current === null) {
+      drawnFiltersSignatureRef.current = filtersSignature;
+      return undefined;
+    }
+    if (drawnFiltersSignatureRef.current === filtersSignature) return undefined;
+
+    filterDrawPendingRef.current = true;
+    const timer = setTimeout(() => {
+      filterDrawPendingRef.current = false;
+      drawnFiltersSignatureRef.current = filtersSignature;
+      draw(true);
+    }, 400);
     return () => clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filtersSignature, activeTab]);

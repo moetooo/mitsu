@@ -1,10 +1,17 @@
 import { useCallback, useEffect, useState } from 'react';
+import { VALID_TABS, getTabFromPath, parseSimilarPath, tabToPath } from '../utils/routeState';
+
+// Re-exported so the public API of this hook stays where callers/tests expect
+// it; the grammar itself lives in `utils/routeState.js` now, next to the query
+// parameter one.
+export { VALID_TABS, getTabFromPath, tabToPath };
 
 /**
  * Tab state and the URL that mirrors it (FE-29 extraction).
  *
- * The four tabs are addressed by path (`/`, `/trending`, `/surprise`,
- * `/bookmarks`), with a one-way compatibility read for the legacy `#tab` form.
+ * The tabs are addressed by path (`/`, `/surprise`, `/bookmarks`), with a one-way
+ * compatibility read for the legacy `#tab` form. There is no trending route: the
+ * ranking lives in Explore's rail, so `/trending` reads as Explore.
  * Two effects kept the two representations in sync: a popstate listener that
  * followed Back/Forward, and a writer that replaced the path whenever the tab
  * changed. Both live here now, so no other code has to remember that `activeTab`
@@ -13,15 +20,6 @@ import { useCallback, useEffect, useState } from 'react';
  * What a tab *does* on entry (a fresh draw, a page-1 refresh, a scroll) is not
  * routing: it stays with the component that owns those effects.
  */
-export const VALID_TABS = ['explore', 'trending', 'surprise', 'bookmarks'];
-
-export const getTabFromPath = (path) => {
-  const clean = (path || '').replace(/^\/+|\/+$/g, '').split('/')[0].toLowerCase();
-  return VALID_TABS.includes(clean) ? clean : 'explore';
-};
-
-export const tabToPath = (tab) => (tab === 'explore' ? '/' : `/${tab}`);
-
 export const getInitialTab = () => {
   if (typeof window === 'undefined') return 'explore';
   // Graceful backward-compatibility cleanup if arriving via a legacy '#tab'
@@ -45,18 +43,24 @@ export default function useTabRouting() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  // Keep the path in step with the tab, without a hash.
+  // Keep the path in step with the tab, without a hash. The search string is
+  // preserved: it carries the explore feed's query/filters/sort/page, and
+  // dropping it here is what made Back from another tab lose the search.
   useEffect(() => {
+    // `/similar/...` is a different destination, not a tab. Rewriting it here
+    // would bounce the full "You Might Also Like" page to Explore on mount.
+    if (parseSimilarPath(window.location.pathname)) return undefined;
+
     const targetPath = tabToPath(activeTab);
     if (window.location.pathname !== targetPath || window.location.hash) {
-      window.history.replaceState({ tab: activeTab }, '', targetPath);
+      window.history.replaceState({ tab: activeTab }, '', targetPath + window.location.search);
     }
   }, [activeTab]);
 
   /** Switch tabs and record it, so Back returns here. */
   const pushTab = useCallback((tabId) => {
     setActiveTab(tabId);
-    window.history.pushState({ tab: tabId }, '', tabToPath(tabId));
+    window.history.pushState({ tab: tabId }, '', tabToPath(tabId) + window.location.search);
   }, []);
 
   return { activeTab, setActiveTab, pushTab };

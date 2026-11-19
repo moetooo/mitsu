@@ -1,7 +1,7 @@
 // FE-23: one client vocabulary, served by the backend.
 //
-// Three hand-copied lists lived in the UI (the filter drawer's categories, the
-// trending genre pills, the trending format pills) while the server kept the real
+// Hand-copied lists lived in the UI (the filter drawer's categories, and the
+// trending pills that have since been deleted) while the server kept the real
 // taxonomy in `app/enrichment/vocabulary.py`. They drifted: the pills offered
 // "Yaoi" and "Yuri", which are synonyms the catalogue does not store as genres.
 //
@@ -14,6 +14,15 @@ import { API_ROUTES } from '../config';
 import { readJSON, writeJSON } from './storage';
 
 const CACHE_KEY = 'mitsu_vocabulary';
+
+// A cached list can go stale in two ways: the taxonomy changes, or an option is
+// re-flagged `filterable: false` because the catalogue stopped backing it. The
+// version is only known *after* asking the server, so a cache entry with no
+// fetch time cannot be checked at all - which is how a browser kept offering
+// ten dead tags long after the server stopped offering them. Entries are now
+// time-boxed, and an entry written by the previous shape (no `fetchedAt`) is
+// treated as stale, so the fix reaches the browsers that already cached it.
+const CACHE_MAX_AGE_MS = 12 * 60 * 60 * 1000;
 
 // Taglines are presentation, not taxonomy, so they live here keyed by the
 // server's category id.
@@ -62,12 +71,21 @@ export const FALLBACK_FORMATS = [
 export function toGroups(categories) {
   if (!Array.isArray(categories)) return [];
   return categories
-    .filter(group => group && Array.isArray(group.options) && group.options.length > 0)
+    .map(group => {
+      if (!group || !Array.isArray(group.options)) return null;
+      // Same rule the formats get: an option the catalogue cannot answer
+      // (`filterable: false`) is not offered, because the pill would only ever
+      // produce an empty shelf. The server decides, the drawer just obeys.
+      const options = group.options
+        .filter(option => option && option.filterable !== false)
+        .map(option => option.value)
+        .filter(Boolean);
+      return { id: group.id, name: group.label || group.id, options };
+    })
+    .filter(group => group && group.options.length > 0)
     .map(group => ({
-      id: group.id,
-      name: group.label || group.id,
-      tagline: TAGLINES[group.id] || group.label || group.id,
-      options: group.options.map(option => option.value).filter(Boolean)
+      ...group,
+      tagline: TAGLINES[group.id] || group.name
     }));
 }
 
@@ -89,11 +107,22 @@ export function normalizeVocabulary(body) {
 
 let inflight = null;
 
-// Fetches once per session and caches by version in localStorage, so a reload
-// does not re-request static data but a taxonomy bump is picked up immediately.
-export async function loadVocabulary() {
+// A cache entry is a first paint, not the final word: it is used only while it
+// is young enough that the served taxonomy has probably not moved.
+function freshCache() {
   const cached = readJSON(CACHE_KEY, null);
-  if (cached && cached.version && Array.isArray(cached.groups)) {
+  if (!cached || !cached.version || !Array.isArray(cached.groups)) return null;
+  if (typeof cached.fetchedAt !== 'number') return null;
+  if (Date.now() - cached.fetchedAt > CACHE_MAX_AGE_MS) return null;
+  return cached;
+}
+
+// Fetches once per session, and reuses the cached list only while it is fresh.
+// On success the answer is written back with the time it was fetched, so the
+// next session knows how old it is instead of trusting it forever.
+export async function loadVocabulary() {
+  const cached = freshCache();
+  if (cached) {
     return { ...cached, fromServer: true };
   }
 
@@ -105,7 +134,14 @@ export async function loadVocabulary() {
       if (!res.ok) throw new Error(`vocabulary request failed: ${res.status}`);
       const body = await res.json();
       const vocabulary = normalizeVocabulary(body);
-      if (vocabulary.fromServer) writeJSON(CACHE_KEY, { version: vocabulary.version, groups: vocabulary.groups, formats: vocabulary.formats });
+      if (vocabulary.fromServer) {
+        writeJSON(CACHE_KEY, {
+          version: vocabulary.version,
+          groups: vocabulary.groups,
+          formats: vocabulary.formats,
+          fetchedAt: Date.now()
+        });
+      }
       return vocabulary;
     } catch (error) {
       // Fallback, not a silent lie: the caller keeps a usable drawer and the
