@@ -2,7 +2,9 @@ import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
 
 export function getProxyTarget(env = process.env) {
-  return env.VITE_DEV_PROXY_TARGET || env.VITE_API_BASE_URL || 'http://localhost:8000';
+  // 8001, not 8000: 8000 is vLLM's default port, and coding agents (opencode)
+  // probe it every 30s for a local model server. Nothing should compete for it.
+  return env.VITE_DEV_PROXY_TARGET || env.VITE_API_BASE_URL || 'http://localhost:8001';
 }
 
 const proxyTarget = getProxyTarget();
@@ -37,6 +39,12 @@ export default defineConfig({
         target: proxyTarget,
         changeOrigin: true,
       },
+      // FE-23: the served taxonomy. It is a root path, not under /manga, which is
+      // why it was the one API route the proxy list did not answer.
+      '/vocabulary': {
+        target: proxyTarget,
+        changeOrigin: true,
+      },
     },
   },
   preview: {
@@ -63,6 +71,12 @@ export default defineConfig({
         changeOrigin: true,
       },
       '/health': {
+        target: proxyTarget,
+        changeOrigin: true,
+      },
+      // FE-23: the served taxonomy. It is a root path, not under /manga, which is
+      // why it was the one API route the proxy list did not answer.
+      '/vocabulary': {
         target: proxyTarget,
         changeOrigin: true,
       },

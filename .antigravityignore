@@ -1,8 +1,0 @@
-node_modules/
-dist/
-build/
-.next/
-public/assets/
-**/*.min.js
-package-lock.json
-yarn.lock
