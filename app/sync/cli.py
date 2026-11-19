@@ -3,9 +3,10 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import logging
+import os
 import sys
 
+from ..core.logging import configure_logging
 from ..core.schema import seed_external_ids, verify_schema
 from .service import run_backfill, run_sync, sync_status
 from ..config import settings
@@ -24,6 +25,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument("--skip-anilist", action="store_true")
     run.add_argument("--skip-mangadex", action="store_true")
     run.add_argument("--no-embeddings", action="store_true")
+    run.add_argument(
+        "--progress-file",
+        default=None,
+        help="Write a live JSON progress snapshot here (used by the launcher window)",
+    )
 
     backfill = sub.add_parser("backfill", help="Refresh every title updated after a cutoff")
     backfill.add_argument("--until", default=settings.SYNC_BACKFILL_CUTOFF)
@@ -90,10 +96,12 @@ async def _migrate() -> int:
 
 def main(argv: list[str] | None = None) -> int:
     args = _build_parser().parse_args(argv)
-    logging.basicConfig(
-        level=getattr(logging, args.log_level.upper(), logging.INFO),
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    )
+    if getattr(args, "progress_file", None):
+        os.environ["MITSU_SYNC_PROGRESS_FILE"] = args.progress_file
+    # Same configuration the API uses, with `--log-level` beating LOG_LEVEL for
+    # this one run (a backfill is often the reason to turn verbosity up).
+    # Logs go to stderr so stdout stays the single JSON blob callers parse.
+    configure_logging(level_override=args.log_level, stream=sys.stderr)
     if args.command == "run":
         return asyncio.run(_run(args))
     if args.command == "backfill":

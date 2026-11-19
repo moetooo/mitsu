@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -13,7 +15,11 @@ from ..core.budget import BudgetExceeded, consume, usage_summary
 from ..core.identity import ExternalId, attach_external_ids, normalize_external_id
 from ..core.schema import seed_external_ids, verify_schema
 from ..db_models import Manga, SyncApiUsage, SyncRun, SyncState
-from ..ingestion.anilist_client import fetch_updated_page
+from ..ingestion.anilist_client import (
+    ANILIST_PAGE_DEPTH_ERROR,
+    ANILIST_PAGE_DEPTH_LIMIT,
+    fetch_updated_page,
+)
 from ..ingestion.mangadex_client import fetch_detail as fetch_mangadex_detail
 from ..ingestion.normalize import anilist_to_record
 from ..ingestion.upsert import smart_upsert_manga_ex
@@ -65,9 +71,65 @@ def _record_updated_at(record: dict[str, Any]) -> datetime | None:
     return _parse_dt(record.get("source_updated_at"))
 
 
+def _is_page_depth_cap(exc: Exception) -> bool:
+    """True when AniList refused a page past its 5000-entry pagination ceiling.
+
+    The API advertises ``lastPage`` beyond the cap (e.g. 101 for 5051 matches at
+    perPage=50) and then answers 400 for that page. That is a completed walk,
+    not a failure.
+    """
+    response = getattr(exc, "response", None)
+    if getattr(response, "status_code", None) != 400:
+        return False
+    try:
+        body = response.text or ""
+    except Exception:  # pragma: no cover - defensive: body already consumed
+        return False
+    return ANILIST_PAGE_DEPTH_ERROR in body
+
+
 def _embedding_text(record: dict[str, Any]) -> str:
     tags = [t.get("name") for t in (record.get("tags") or []) if isinstance(t, dict)]
     return f"{record.get('synopsis', '') or ''} Tags: {', '.join(t for t in tags if t)}"
+
+
+def _write_progress(summary: dict[str, Any], phase: str, **extra: Any) -> None:
+    """Publish a small JSON snapshot so a UI can show live progress.
+
+    The CLI runs as a separate process and its stdout is a single JSON blob at
+    the very end. A progress file lets the launcher show page counts while the
+    run is still in flight. Disabled unless the launcher sets the env var, and
+    never allowed to break a run: errors are logged and swallowed.
+    """
+    path = os.environ.get("MITSU_SYNC_PROGRESS_FILE")
+    if not path:
+        return
+    payload = {
+        "phase": phase,
+        "run_id": summary.get("run_id"),
+        "mode": summary.get("mode"),
+        "dry_run": bool(summary.get("dry_run")),
+        "status": summary.get("status"),
+        "pages_fetched": int(summary.get("pages_fetched") or 0),
+        "rows_seen": int(summary.get("rows_seen") or 0),
+        "rows_inserted": int(summary.get("rows_inserted") or 0),
+        "rows_updated": int(summary.get("rows_updated") or 0),
+        "rows_unchanged": int(summary.get("rows_unchanged") or 0),
+        "rows_embedded": int(summary.get("rows_embedded") or 0),
+        "errors": list(summary.get("errors") or []),
+        "updated_at": _utcnow().isoformat(),
+    }
+    payload.update(extra)
+    try:
+        parent = os.path.dirname(os.path.abspath(path))
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as handle:
+            json.dump(payload, handle)
+        os.replace(tmp, path)
+    except Exception:
+        logger.warning("Could not write sync progress file", exc_info=True)
 
 
 async def _create_run(run_id: str, mode: str, dry_run: bool, status: str = "running") -> None:
@@ -101,6 +163,7 @@ async def _finish_run(run_id: str, status: str, summary: dict[str, Any], error: 
         run.request_usage = summary.get("request_usage", {})
         run.details = summary
         await session.commit()
+    _write_progress(summary, "done", status=status)
 
 
 async def _prune_runs() -> None:
@@ -151,17 +214,28 @@ async def _run_anilist(
 ) -> None:
     state = await _get_state("anilist")
     start_checkpoint = since or (state.checkpoint_at if state else None)
-    oldest_saved = start_checkpoint
+    # With no prior checkpoint there is no known gap to leave behind; the
+    # initial catalogue was ingested separately.
+    reached_watermark = start_checkpoint is None
+    newest_seen: datetime | None = None
+    deepest_seen: datetime | None = None
+    saved_floor: datetime | None = None
     await _save_state("anilist", last_attempt_at=_utcnow())
 
     page = 1
+    requests_attempted = 0
     while page <= max_pages:
         try:
             async def consume_one() -> int:
+                nonlocal requests_attempted
                 # A dry run checks the budget but must not spend it.
-                return await consume(
+                usage = await consume(
                     "anilist", settings.ANILIST_DAILY_REQUEST_BUDGET, spend=not dry_run
                 )
+                # Counted after the budget check: a rejected request was never
+                # sent, so it must not look like a provider request in history.
+                requests_attempted += 1
+                return usage
 
             data = await fetch_updated_page(
                 page,
@@ -182,16 +256,21 @@ async def _run_anilist(
         items = data.get("media") or []
         summary["pages_fetched"] += 1
         if not items:
+            reached_watermark = True
             break
 
-        page_newest: datetime | None = None
-        page_oldest: datetime | None = None
         page_records: list[dict[str, Any]] = []
         for raw in items:
             record = anilist_to_record(raw)
             updated = _record_updated_at(record)
-            if updated and (page_newest is None or updated > page_newest):
-                page_newest = updated
+            if updated:
+                # Both ends of the feed that this run has looked at. The newest
+                # row is where a completed run can restart from; the deepest row
+                # proves how far the walk actually read.
+                if newest_seen is None or updated > newest_seen:
+                    newest_seen = updated
+                if deepest_seen is None or updated < deepest_seen:
+                    deepest_seen = updated
             # Strictly older than the checkpoint is known work. A record stamped
             # exactly AT the checkpoint may be the one the previous run did not
             # reach before it stopped, so it is processed again; the upsert is
@@ -199,8 +278,6 @@ async def _run_anilist(
             if start_checkpoint and updated and updated < start_checkpoint:
                 summary["rows_unchanged"] += 1
                 continue
-            if updated and (page_oldest is None or updated < page_oldest):
-                page_oldest = updated
             page_records.append(record)
 
         summary["rows_seen"] += len(items)
@@ -212,25 +289,55 @@ async def _run_anilist(
                 generate_embeddings=generate_embeddings,
             )
 
-        # Use the OLDEST processed update as the watermark. With UPDATED_AT_DESC,
-        # taking the newest would skip the pages we did not fetch this run.
-        if page_oldest and (oldest_saved is None or page_oldest > oldest_saved):
-            oldest_saved = page_oldest
+        _write_progress(summary, "anilist", page=page, pages_target=max_pages)
 
         if not data.get("pageInfo", {}).get("hasNextPage"):
+            reached_watermark = True
             break
-        if start_checkpoint and page_newest and page_newest <= start_checkpoint:
+        # Completion is "we read down to (or past) the previous floor", not
+        # "the whole page is older than it": the page that crosses the floor
+        # still holds newer rows above it, and those are now processed.
+        if start_checkpoint and deepest_seen and deepest_seen <= start_checkpoint:
+            reached_watermark = True
             break
         page += 1
 
-    if not dry_run and oldest_saved and (start_checkpoint is None or oldest_saved > start_checkpoint):
-        await _save_state(
-            "anilist",
-            checkpoint_at=oldest_saved,
-            checkpoint_value=str(int(oldest_saved.timestamp())),
-            last_success_at=_utcnow(),
-            last_error=None,
-        )
+    # Only a walk that reached the previous floor may move it. A run that hit
+    # max_pages (a 1-page manual run, a small remaining budget) leaves the floor
+    # where it was, so the next run walks the same stretch again instead of
+    # declaring unread history "done". Records are idempotent, so re-reading is
+    # safe; skipping is not.
+    if not dry_run and reached_watermark and not summary["errors"]:
+        if newest_seen and (start_checkpoint is None or newest_seen > start_checkpoint):
+            saved_floor = newest_seen
+            await _save_state(
+                "anilist",
+                checkpoint_at=saved_floor,
+                checkpoint_value=str(int(saved_floor.timestamp())),
+                last_success_at=_utcnow(),
+                last_error=None,
+            )
+        else:
+            # Caught up with nothing newer than the floor: just record success.
+            await _save_state("anilist", last_success_at=_utcnow(), last_error=None)
+
+    # Honest gap reporting: a run that stopped at max_pages before reaching the
+    # floor has not caught up yet. Nothing is skipped (the floor only moves on a
+    # completed walk); this just says so out loud.
+    summary["details"]["anilist"] = {
+        "start_checkpoint": _iso(start_checkpoint),
+        "watermark": _iso(saved_floor or start_checkpoint),
+        "newest_seen": _iso(newest_seen),
+        "deepest_seen": _iso(deepest_seen),
+        "reached_watermark": reached_watermark,
+        "backlog_remaining": not reached_watermark,
+        "pages_fetched": int(summary["pages_fetched"]),
+        "rows_changed": int(summary["rows_inserted"] + summary["rows_updated"]),
+        "max_pages": int(max_pages),
+        # Per-run accounting: the daily counter is a snapshot of the whole day,
+        # so this is what lets the dashboard say "this run spent N requests".
+        "requests_attempted": int(requests_attempted),
+    }
 
     if summary["errors"]:
         summary["details"]["anilist_usage"] = await usage_summary(
@@ -331,9 +438,11 @@ async def _run_mangadex_links(
 
         if not rows:
             summary["details"]["mangadex_links"] = {"cursor": cursor, "processed": 0}
+            summary["details"]["mangadex"] = {"requests_attempted": 0, "processed": 0}
             return
 
         processed = 0
+        requests_attempted = 0
         last_id = cursor
         for row in rows:
             try:
@@ -344,6 +453,7 @@ async def _run_mangadex_links(
                 summary["errors"].append(str(exc))
                 break
 
+            requests_attempted += 1
             try:
                 raw = await fetch_mangadex_detail(row.mangadex_id)
             except Exception as exc:
@@ -403,6 +513,10 @@ async def _run_mangadex_links(
             "cursor": last_id,
             "processed": processed,
         }
+        summary["details"]["mangadex"] = {
+            "requests_attempted": int(requests_attempted),
+            "processed": processed,
+        }
 
     if not dry_run and last_id > cursor:
         await _save_state(
@@ -454,6 +568,7 @@ async def run_sync(
         "details": {},
         "errors": [],
     }
+    _write_progress(summary, "starting")
 
     auto_enabled = await get_auto_enabled()
     if not settings.SYNC_ENABLED or (mode == "auto" and not auto_enabled):
@@ -476,6 +591,7 @@ async def run_sync(
         summary["status"] = "failed"
         summary["errors"].append(f"schema: {exc}")
         logger.exception("Could not prepare sync schema")
+        _write_progress(summary, "done")
         return summary
 
     try:
@@ -500,6 +616,7 @@ async def run_sync(
 
         try:
             await _create_run(run_id, mode, dry_run)
+            _write_progress(summary, "running", pages_target=int(pages))
             if include_anilist:
                 await _run_anilist(
                     summary,
@@ -514,6 +631,7 @@ async def run_sync(
                     batch_size=settings.MANGADEX_SYNC_BATCH_SIZE,
                     dry_run=dry_run,
                 )
+                _write_progress(summary, "mangadex")
 
             changed = (
                 summary["rows_inserted"] + summary["rows_updated"] + summary["rows_embedded"]
@@ -544,6 +662,17 @@ async def run_sync(
     return summary
 
 
+def _run_details(run: SyncRun) -> dict[str, Any]:
+    """The interesting payload of a stored run summary.
+
+    `_finish_run` stores the whole summary (`{"mode", ..., "details": {...}}`),
+    so the useful keys sit one level down. Flat rows are tolerated too.
+    """
+    raw = run.details or {}
+    inner = raw.get("details")
+    return inner if isinstance(inner, dict) else raw
+
+
 async def sync_status(limit: int = 5, offset: int = 0) -> dict[str, Any]:
     limit = max(1, min(int(limit), 50))
     offset = max(0, int(offset))
@@ -562,6 +691,12 @@ async def sync_status(limit: int = 5, offset: int = 0) -> dict[str, Any]:
             .order_by(SyncRun.started_at.desc())
             .limit(1)
         )
+        latest_auto = (await session.execute(
+            select(SyncRun)
+            .where(SyncRun.mode == "auto")
+            .order_by(SyncRun.started_at.desc(), SyncRun.id.desc())
+            .limit(1)
+        )).scalars().first()
 
     backfill_state = next((state for state in states if state.source == "anilist_backfill"), None)
     backfill_value = backfill_state.checkpoint_value if backfill_state else None
@@ -585,6 +720,9 @@ async def sync_status(limit: int = 5, offset: int = 0) -> dict[str, Any]:
     pages_done = max(0, next_page - 1) if next_page else 0
 
     if backfill_complete:
+        # The cursor is the string "complete", not a page number; report the
+        # walk as full instead of "0 / 100".
+        pages_done = total_pages or pages_done
         backfill_percent = 100.0
         progress_basis = "complete"
     elif total_pages:
@@ -604,8 +742,10 @@ async def sync_status(limit: int = 5, offset: int = 0) -> dict[str, Any]:
         remaining_days = round(max(0.0, (end - cutoff_dt).total_seconds()) / 86400, 1)
 
     auto = await auto_state()
+    guard = await guard_status()
     anilist_budget = await usage_summary("anilist", effective_daily_limit("anilist"))
     mangadex_budget = await usage_summary("mangadex", effective_daily_limit("mangadex"))
+    auto_anilist = _run_details(latest_auto).get("anilist") if latest_auto else None
 
     return {
         "enabled": settings.SYNC_ENABLED,
@@ -616,7 +756,27 @@ async def sync_status(limit: int = 5, offset: int = 0) -> dict[str, Any]:
             "mangadex": mangadex_budget,
         },
         "limits": limits_from_usage(anilist_budget),
-        "guardrails": await guard_status(),
+        "guardrails": guard,
+        "auto": {
+            "ran_today": guard["auto_ran_today"],
+            "day": guard["auto_day"],
+            "day_tz": guard["auto_day_tz"],
+            "runs_today": guard["auto_runs_today"],
+            "daily_limit": guard["auto_daily_limit"],
+            "next_prompt_after": guard["auto_next_at"],
+            "last_run_id": latest_auto.run_id if latest_auto else None,
+            "last_started_at": _iso(latest_auto.started_at) if latest_auto else None,
+            "last_status": latest_auto.status if latest_auto else None,
+            "last_error": latest_auto.error if latest_auto else None,
+            "last_pages_fetched": latest_auto.pages_fetched if latest_auto else None,
+            "last_rows_changed": (
+                int(latest_auto.rows_inserted) + int(latest_auto.rows_updated)
+                if latest_auto else None
+            ),
+            "reached_watermark": auto_anilist.get("reached_watermark") if auto_anilist else None,
+            "watermark_at": auto_anilist.get("watermark") if auto_anilist else None,
+            "backlog_remaining": auto_anilist.get("backlog_remaining") if auto_anilist else None,
+        },
         "backfill": {
             "complete": backfill_complete,
             "percent": backfill_percent,
@@ -664,12 +824,52 @@ async def sync_status(limit: int = 5, offset: int = 0) -> dict[str, Any]:
                 "rows_conflicted": run.rows_conflicted,
                 "request_usage": run.request_usage,
                 "error": run.error,
+                # Compact projection: enough for the dashboard row and the
+                # popup script, without shipping conflict arrays on every poll.
+                "details": {
+                    key: _run_details(run).get(key)
+                    for key in (
+                        "guardrail",
+                        "errors",
+                        "anilist",
+                        "mangadex",
+                        "backfill",
+                        "cache_keys_deleted",
+                    )
+                    if _run_details(run).get(key) is not None
+                },
             }
             for run in runs
         ],
         "runs_total": runs_total,
         "runs_offset": offset,
         "has_more": offset + len(runs) < runs_total,
+    }
+
+
+async def sync_run_detail(run_id: str) -> dict[str, Any] | None:
+    """Full stored summary for one run, for debugging beyond the compact view."""
+    async with AsyncSessionLocal() as session:
+        run = await session.scalar(select(SyncRun).where(SyncRun.run_id == run_id))
+    if run is None:
+        return None
+    return {
+        "run_id": run.run_id,
+        "mode": run.mode,
+        "status": run.status,
+        "dry_run": run.dry_run,
+        "started_at": _iso(run.started_at),
+        "finished_at": _iso(run.finished_at),
+        "pages_fetched": run.pages_fetched,
+        "rows_seen": run.rows_seen,
+        "rows_inserted": run.rows_inserted,
+        "rows_updated": run.rows_updated,
+        "rows_unchanged": run.rows_unchanged,
+        "rows_embedded": run.rows_embedded,
+        "rows_conflicted": run.rows_conflicted,
+        "request_usage": run.request_usage,
+        "error": run.error,
+        "details": run.details or {},
     }
 
 
@@ -739,6 +939,7 @@ async def _run_anilist_backfill(
 
     reached_cutoff = False
     complete = False
+    capped = False
     requests_attempted = 0
     oldest_page_at: datetime | None = None
     last_page: int | None = None
@@ -763,6 +964,22 @@ async def _run_anilist_backfill(
                 )
                 break
             except Exception as exc:
+                if _is_page_depth_cap(exc):
+                    # AniList's hard ceiling: page * perPage <= 5000. The
+                    # advertised lastPage can point one past it, so this is the
+                    # deepest walk that exists, not an error.
+                    capped = True
+                    complete = True
+                    last_page = max(
+                        1,
+                        ANILIST_PAGE_DEPTH_LIMIT // max(1, settings.ANILIST_SYNC_PAGE_SIZE),
+                    )
+                    logger.info(
+                        "AniList backfill hit the %d-entry pagination cap at page %d",
+                        ANILIST_PAGE_DEPTH_LIMIT,
+                        page,
+                    )
+                    break
                 summary["errors"].append(f"anilist backfill page {page}: {exc}")
                 await _save_state("anilist_backfill", last_error=str(exc))
                 break
@@ -821,6 +1038,7 @@ async def _run_anilist_backfill(
             "next_page": page,
             "reached_cutoff": reached_cutoff,
             "complete": complete,
+            "capped": capped,
             "oldest_page_at": _iso(oldest_page_at),
             "last_page": last_page,
             "requests_attempted": requests_attempted,

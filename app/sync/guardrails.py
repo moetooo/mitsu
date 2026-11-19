@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import func, select, update
 
@@ -10,7 +11,12 @@ from ..db_models import SyncRun
 from ..core.budget import db_utc_day, reset_at, usage_summary
 
 # Statuses that represent a real attempt and therefore count toward the day.
-COUNTED_STATUSES = ("running", "success", "partial", "failed", "rejected")
+# A rejected trigger never reached a provider, so counting it would let one
+# refusal push the day's counter further over the limit and lock the user out.
+COUNTED_STATUSES = ("running", "success", "partial", "failed")
+# A local-day auto slot is only spent once the run actually starts working.
+# A failure may be retried; rejections never consume it.
+AUTO_COUNTED_STATUSES = ("running", "success", "partial")
 STALE_AFTER = timedelta(hours=2)
 COOLDOWN_MODES = ("manual", "backfill")
 
@@ -103,6 +109,19 @@ async def reap_stale_runs() -> int:
             return result.rowcount or 0
 
 
+def _local_day_window(now_utc: datetime | None = None) -> tuple[str, datetime, datetime]:
+    """Local-day bounds for the auto gate, returned as aware UTC datetimes."""
+    zone = ZoneInfo(settings.SYNC_AUTO_DAY_TZ)
+    now_local = (now_utc or datetime.now(timezone.utc)).astimezone(zone)
+    start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_local = start_local + timedelta(days=1)
+    return (
+        start_local.date().isoformat(),
+        start_local.astimezone(timezone.utc),
+        end_local.astimezone(timezone.utc),
+    )
+
+
 async def _today_state() -> dict:
     async with AsyncSessionLocal() as session:
         day = await db_utc_day(session)
@@ -113,12 +132,28 @@ async def _today_state() -> dict:
             .where(
                 func.date(func.timezone("utc", SyncRun.started_at)) == day,
                 SyncRun.status.in_(COUNTED_STATUSES),
+                # A rehearsal spends no budget, so it must not consume one of
+                # the day's real run slots (same rule as the auto gate).
+                SyncRun.dry_run.is_(False),
             )
         )
         last_trigger = await session.scalar(
             select(func.max(SyncRun.started_at)).where(
                 SyncRun.mode.in_(COOLDOWN_MODES),
-                SyncRun.status != "skipped",
+                # A rejected or skipped trigger never ran, so it must not arm a
+                # cooldown that blocks the next real attempt.
+                SyncRun.status.in_(COUNTED_STATUSES),
+            )
+        )
+        auto_day, auto_day_start, auto_next_at = _local_day_window()
+        auto_runs_today = await session.scalar(
+            select(func.count())
+            .select_from(SyncRun)
+            .where(
+                SyncRun.mode == "auto",
+                SyncRun.status.in_(AUTO_COUNTED_STATUSES),
+                SyncRun.dry_run.is_(False),
+                SyncRun.started_at >= auto_day_start,
             )
         )
     cooldown = max(0, int(settings.SYNC_MANUAL_COOLDOWN_SECONDS))
@@ -130,6 +165,11 @@ async def _today_state() -> dict:
         "daily_run_limit": max(1, int(settings.SYNC_DAILY_RUN_LIMIT)),
         "cooldown_seconds": cooldown,
         "next_manual_at": next_manual_at,
+        "auto_day": auto_day,
+        "auto_day_start": auto_day_start,
+        "auto_next_at": auto_next_at,
+        "auto_runs_today": int(auto_runs_today or 0),
+        "auto_daily_limit": max(1, int(settings.SYNC_AUTO_DAILY_RUN_LIMIT)),
     }
 
 
@@ -153,6 +193,16 @@ async def preflight_trigger(mode: str) -> dict:
         )
 
     next_manual_at: datetime | None = state["next_manual_at"]
+    if mode == "auto" and state["auto_runs_today"] >= state["auto_daily_limit"]:
+        auto_ends_at: datetime = state["auto_next_at"]
+        retry_after = max(1, int((auto_ends_at - now).total_seconds()))
+        raise GuardrailError(
+            "auto_daily_limit",
+            f"auto sync already ran today ({state['auto_runs_today']}/"
+            f"{state['auto_daily_limit']} in {settings.SYNC_AUTO_DAY_TZ}); "
+            "next prompt after local midnight",
+            retry_after=retry_after,
+        )
     if mode in COOLDOWN_MODES and next_manual_at and now < next_manual_at:
         retry_after = max(1, int((next_manual_at - now).total_seconds()))
         raise GuardrailError(
@@ -186,6 +236,8 @@ async def preflight_trigger(mode: str) -> dict:
         "cooldown_seconds": state["cooldown_seconds"],
         "max_pages": mode_limit,
         "anilist_remaining": limits["anilist_remaining"],
+        "auto_runs_today": state["auto_runs_today"],
+        "auto_daily_limit": state["auto_daily_limit"],
     }
 
 
@@ -203,4 +255,10 @@ async def guard_status() -> dict:
         "daily_run_limit": state["daily_run_limit"],
         "cooldown_seconds": state["cooldown_seconds"],
         "next_manual_at": next_manual_at.isoformat() if next_manual_at and now < next_manual_at else None,
+        "auto_day": state["auto_day"],
+        "auto_day_tz": settings.SYNC_AUTO_DAY_TZ,
+        "auto_next_at": state["auto_next_at"].isoformat(),
+        "auto_runs_today": state["auto_runs_today"],
+        "auto_daily_limit": state["auto_daily_limit"],
+        "auto_ran_today": state["auto_runs_today"] >= state["auto_daily_limit"],
     }

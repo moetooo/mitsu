@@ -92,6 +92,7 @@ async def test_full_sync_request_usage_equals_mangadex_budget_delta(monkeypatch)
     assert after - before == len(calls), "budget delta must equal real requests made"
     assert summary["request_usage"]["mangadex"]["used"] == after
     assert summary["request_usage"]["mangadex"]["used"] - before == len(calls)
+    assert summary["details"]["mangadex"]["requests_attempted"] == len(calls)
 
 
 @pytest.mark.asyncio
@@ -114,3 +115,5 @@ async def test_dry_run_makes_the_same_requests_without_spending_budget(monkeypat
     assert len(calls) == 2
     assert after == before, "a dry run must never consume provider budget"
     assert summary["request_usage"]["mangadex"]["used"] == before
+    # The run still reports the calls it made, so a dry run is auditable.
+    assert summary["details"]["mangadex"]["requests_attempted"] == len(calls)

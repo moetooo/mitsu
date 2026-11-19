@@ -54,10 +54,10 @@ async def test_budget_is_capped_and_summary_has_progress_fields():
             await session.commit()
 
 
-async def _insert_run(mode: str, status: str = "success") -> str:
+async def _insert_run(mode: str, status: str = "success", dry_run: bool = False) -> str:
     run_id = str(uuid.uuid4())
     async with AsyncSessionLocal() as session:
-        session.add(SyncRun(run_id=run_id, mode=mode, status=status, dry_run=False))
+        session.add(SyncRun(run_id=run_id, mode=mode, status=status, dry_run=dry_run))
         await session.commit()
     return run_id
 
@@ -83,9 +83,38 @@ async def test_daily_run_limit_blocks_before_any_request(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_rejected_runs_do_not_count_or_arm_a_cooldown(monkeypatch):
+    """A refusal never reached a provider, so it cannot lock the day further."""
+    monkeypatch.setattr(settings, "SYNC_MANUAL_COOLDOWN_SECONDS", 600)
+    monkeypatch.setattr(settings, "SYNC_DAILY_RUN_LIMIT", 10_000)
+    before = await guardrails.guard_status()
+    run_id = await _insert_run("manual", status="rejected")
+    try:
+        after = await guardrails.guard_status()
+        assert after["runs_today"] == before["runs_today"]
+        assert after["next_manual_at"] == before["next_manual_at"]
+    finally:
+        await _delete_run(run_id)
+
+
+@pytest.mark.asyncio
+async def test_dry_runs_do_not_consume_a_daily_run_slot():
+    """Rehearsals spend no budget, so they must not use a real run slot."""
+    before = await guardrails.guard_status()
+    run_id = await _insert_run("manual", status="success", dry_run=True)
+    try:
+        after = await guardrails.guard_status()
+        assert after["runs_today"] == before["runs_today"]
+    finally:
+        await _delete_run(run_id)
+
+
+@pytest.mark.asyncio
 async def test_manual_cooldown_blocks_manual_but_not_auto(monkeypatch):
     monkeypatch.setattr(settings, "SYNC_DAILY_RUN_LIMIT", 10_000)
     monkeypatch.setattr(settings, "SYNC_MANUAL_COOLDOWN_SECONDS", 600)
+    baseline = (await guardrails.guard_status())["auto_runs_today"]
+    monkeypatch.setattr(settings, "SYNC_AUTO_DAILY_RUN_LIMIT", baseline + 1)
     run_id = await _insert_run("manual")
     try:
         with pytest.raises(guardrails.GuardrailError) as exc:
@@ -191,6 +220,60 @@ async def test_auto_mode_is_skipped_when_switch_is_off(monkeypatch):
         assert "auto sync is turned off" in summary["errors"]
     finally:
         await _delete_run(run_id)
+
+
+@pytest.mark.asyncio
+async def test_auto_gate_allows_one_real_run_per_local_day(monkeypatch):
+    monkeypatch.setattr(settings, "SYNC_DAILY_RUN_LIMIT", 10_000)
+    monkeypatch.setattr(settings, "SYNC_MANUAL_COOLDOWN_SECONDS", 0)
+    # History may already hold today's real auto run; test relative to it.
+    baseline = (await guardrails.guard_status())["auto_runs_today"]
+    monkeypatch.setattr(settings, "SYNC_AUTO_DAILY_RUN_LIMIT", baseline + 1)
+
+    dry_id = await _insert_run("auto", dry_run=True)
+    try:
+        # A dry run must not spend the day's slot.
+        guard = await guardrails.preflight_trigger("auto")
+        assert guard["auto_runs_today"] == baseline
+    finally:
+        await _delete_run(dry_id)
+
+    auto_id = await _insert_run("auto")
+    try:
+        with pytest.raises(guardrails.GuardrailError) as exc:
+            await guardrails.preflight_trigger("auto")
+        assert exc.value.code == "auto_daily_limit"
+        assert exc.value.retry_after and exc.value.retry_after > 0
+
+        # Manual runs are governed by their own (cooldown) rules.
+        assert await guardrails.preflight_trigger("manual") is not None
+    finally:
+        await _delete_run(auto_id)
+
+
+@pytest.mark.asyncio
+async def test_failed_auto_run_does_not_spend_the_day(monkeypatch):
+    monkeypatch.setattr(settings, "SYNC_DAILY_RUN_LIMIT", 10_000)
+    monkeypatch.setattr(settings, "SYNC_MANUAL_COOLDOWN_SECONDS", 0)
+    baseline = (await guardrails.guard_status())["auto_runs_today"]
+    monkeypatch.setattr(settings, "SYNC_AUTO_DAILY_RUN_LIMIT", baseline + 1)
+
+    failed_id = await _insert_run("auto", status="failed")
+    try:
+        assert await guardrails.preflight_trigger("auto") is not None
+    finally:
+        await _delete_run(failed_id)
+
+
+def test_local_day_window_follows_the_configured_timezone(monkeypatch):
+    from datetime import datetime, timezone
+
+    monkeypatch.setattr(settings, "SYNC_AUTO_DAY_TZ", "Asia/Kolkata")
+    # 2026-11-17 20:30 UTC == 2026-11-18 02:00 IST, so the IST day is the 18th.
+    day, start, end = guardrails._local_day_window(datetime(2026, 11, 17, 20, 30, tzinfo=timezone.utc))
+    assert day == "2026-11-18"
+    assert start.isoformat() == "2026-11-17T18:30:00+00:00"
+    assert end.isoformat() == "2026-11-18T18:30:00+00:00"
 
 
 def test_trigger_limits_keep_the_daily_sync_reserve(monkeypatch):

@@ -25,7 +25,7 @@ from ..sync.guardrails import (
     effective_daily_limit,
     preflight_trigger,
 )
-from ..sync.service import ingestion_status, run_backfill, run_sync, sync_status
+from ..sync.service import ingestion_status, run_backfill, run_sync, sync_run_detail, sync_status
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -247,6 +247,15 @@ async def get_sync_status(
     offset: int = Query(default=0, ge=0),
 ):
     return await sync_status(limit=limit, offset=offset)
+
+
+@router.get("/sync/runs/{run_id}", dependencies=[Depends(require_sync_admin)])
+async def get_sync_run(run_id: str):
+    """Full stored summary for one run (the compact status payload is trimmed)."""
+    detail = await sync_run_detail(run_id)
+    if detail is None:
+        raise HTTPException(status_code=404, detail="sync run not found")
+    return detail
 
 
 @router.post("/auto", dependencies=[Depends(require_sync_admin)])
