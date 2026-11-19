@@ -10,6 +10,7 @@
 - **Trope & Comparison Queries**: Hybrid recommendation builder ("Like X but Y").
 - **Japanese Shibui Aesthetic**: Minimalist UI inspired by Japanese design principles (Sumi & Washi themes, Hanko seals).
 - **Multi-Criteria Filtering**: Filter by genre, year, status, origin, chapter count, and score.
+- **Trending Rail**: Explore opens on a cover rail of the top ten, with a Manga / Manhwa / Manhua toggle that reloads the rail in place — one cached request per format, no paging.
 - **Redis Response Caching**: High-performance response caching for trending, featured, and recommendation endpoints.
 
 ---
@@ -29,6 +30,12 @@
 docker compose up -d
 ```
 
+> Docker Engine runs natively inside the Ubuntu WSL2 distro (Docker Desktop is
+> not installed). Run this from a WSL shell, or prefix it with
+> `wsl -d Ubuntu --` from Windows. See
+> [`docs/wsl-docker.md`](docs/wsl-docker.md) for the full environment,
+> autostart, and backup setup.
+
 ### 2. Start Backend API
 ```bash
 # Activate virtualenv & install requirements
@@ -37,9 +44,23 @@ pip install -r requirements.txt
 # Create/upgrade the schema (Alembic owns the schema; nothing does it at startup)
 alembic upgrade head
 
-# Launch FastAPI dev server
-uvicorn app.main:app --reload
+# Launch FastAPI dev server. The app logs one line per request itself
+# (`app/middleware/request_log.py`) and silences uvicorn's access log in
+# `app/core/logging.py`, so no extra flags are needed.
+python -m app                 # port 8001 built in (app/__main__.py)
 ```
+
+Port 8001, not 8000: 8000 is vLLM's default port and coding agents probe it
+every 30 s for a local model server (`GET /v1/models`), which would fill the
+request log with 404s. `python -m app` sets the port for you; the other two
+spellings work too, in increasing order of typing:
+
+```bash
+UVICORN_PORT=8001 uvicorn app.main:app --reload   # uvicorn reads UVICORN_* for defaults
+uvicorn app.main:app --reload --port 8001        # explicit flag, always wins
+```
+
+`API_PORT` / `API_HOST` override `python -m app`'s defaults.
 
 `alembic upgrade head` is the only way to change a table. An existing database
 that predates migrations should be brought in with `alembic stamp <revision>`
@@ -67,7 +88,7 @@ python -m app.sync.cli backfill --until 2026-08-06T19:43:15+00:00 --max-pages 25
 python -m app.sync.cli status
 ```
 
-Open <http://localhost:8000/admin/dashboard> for the control page: daily request
+Open <http://localhost:8001/admin/dashboard> for the control page: daily request
 bars, backfill progress toward the cutoff, guardrail counters, a dark/light
 toggle, paginated run history with expandable multiline details, and
 manual/backfill triggers. Sign in with `SYNC_ADMIN_USERNAME` / `SYNC_ADMIN_PASSWORD`.

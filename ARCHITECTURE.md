@@ -99,7 +99,35 @@ The core Discovery Roulette UI is controlled by a continuous 4-step state machin
 3. System waits for backend API response and **100% image pre-loading**.
 4. Loading capsule slides left as the new card slides in from the right.
 
-### 4.5. Hybrid Vector Search Engine
+### 4.5. Explore: one surface with a Trending Rail
+Explore answers one question at a time. Its arrival state is the ranking; a
+result set replaces the ranking with the answer.
+
+- **Arrival (no result set).** Hero banner, search bar, then a `TRENDING` label,
+  a hairline rule, a **Manga / Manhwa / Manhua toggle** and a horizontal rail of
+  the top ten covers of the selected format. The rail reuses the detail modal's
+  card (`SimilarCoverItem`) through one shared `CoverRail`, so the modal and the
+  page cannot drift apart. The toggle is local UI state: it changes what the rail
+  shows, never the URL, so no history entry is created and nothing on the page
+  redirects anywhere.
+- **One request per format**, cached server-side under
+  `manga:trending:{manga,manhwa,manhua}:all:1:10` and client-side per selection,
+  so flipping Manga → Manhwa → Manga costs two requests, not three. A superseded
+  response never lands under a newer label, and a failure renders nothing rather
+  than an error banner (the next selection retries).
+- **No pagination and no hand-over.** There is no Load More tile and no
+  `/trending` route: an old `/trending` link reads as Explore, which shows the
+  same ranking. The header nav therefore carries no Trending tab.
+- **Result set (typed search or a filter-only browse).** The rail disappears and
+  the grid becomes a plain answer: no rank badges, and a match percentage only
+  when there is a committed query to be similar to. Clearing the box and the
+  filters returns to the arrival state.
+
+The earlier merged design — one Browse tab that browsed the catalogue and called
+it "Top titles" — is gone: it duplicated the ranking, numbered rows nobody had
+asked to rank, and sat behind pills the rail now expresses as three buttons.
+
+### 4.6. Hybrid Vector Search Engine
 Combines explicit scalar filtering (year, score, status, genres) with cosine distance vector retrieval (`<=>` operator via HNSW index on `pgvector`). Supports "Like X but Y" queries by manipulating the embedding space dynamically.
 
 ## 5. Data Models (Key Schemas)
@@ -119,8 +147,12 @@ Combines explicit scalar filtering (year, score, status, genres) with cosine dis
   - `/app/ingestion/`: Pipeline scripts for data gathering
   - `/app/sync/`: the only orchestrator of provider access (budget, guardrails, checkpointing)
 - `/frontend/`: React + Vite application
-  - `/frontend/src/components/`: Reusable UI components
+  - `/frontend/src/components/`: UI grouped by role — `common/` (shared primitives), `layout/` (header), `manga/` (cards, grid, detail modal, covers), `explore/` (hero, trending rail), `views/` (bookmarks, similar, surprise), `controls/` (search, filters, settings)
+  - `/frontend/src/hooks/`: one hook per concern (routing, search, covers, bookmarks, …)
+  - `/frontend/src/utils/`: pure helpers (filters, storage, vocabulary, formatting)
+  - `/frontend/src/dashboard/`: separate admin entry (`DashboardApp` + stylesheet)
   - `/frontend/src/index.css`: Design system CSS variables and token declarations
+  - `/frontend/tests/`: Vitest suite mirroring `src/` (setup, harness, components, hooks, utils, contract); imports application code through the `@` alias
 - `/migrations/`: Alembic revisions — the only way a table changes
 - `/tests/`: test suite (`pytest`), split by behaviour; the database is created by the migrations and never the developer's own
 
