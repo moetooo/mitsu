@@ -13,28 +13,28 @@
  * Behavioural rules, identical at every call site:
  * - the highlight is one element moved with `transform`, never a background on
  *   each button: the toggle reads as a position being carried from slot to slot;
- * - slots are equal width (`basis-0` + a shared `min-w`), which is what makes
- *   "one indicator width = one slot" true, so the highlight always lands inside
- *   the button it belongs to;
+ * - slots are equal width: the track is a grid of `1fr` columns sized to the
+ *   widest label, which makes "one indicator width = one slot" true, so the
+ *   highlight always lands inside the button it belongs to and no label is
+ *   truncated to make the maths work;
  * - motion is 300ms ease-out and off entirely under `prefers-reduced-motion`;
  * - it never renders a link and never navigates: it reports the chosen id and
  *   leaves routing to the caller.
  */
 const SIZES = {
   sm: {
-    track: 'p-1',
-    item: 'min-w-[72px] px-3 py-1 text-[11px] font-mono uppercase tracking-[0.12em]',
-    indicator: 'inset-y-1 left-1',
-    // (track width - 2 * p-1) / n is one slot; padding is 0.25rem each side.
-    slotWidth: (count) => `calc((100% - 0.5rem) / ${count})`
+    item: 'px-3 py-1 text-[11px] font-mono uppercase tracking-[0.12em]',
+    indicator: 'inset-y-1 left-1'
   },
   md: {
-    track: 'p-1',
-    item: 'min-w-[96px] px-4 py-1.5 text-xs font-medium',
-    indicator: 'inset-y-1 left-1',
-    slotWidth: (count) => `calc((100% - 0.5rem) / ${count})`
+    item: 'px-4 py-1.5 text-xs font-medium',
+    indicator: 'inset-y-1 left-1'
   }
 };
+
+// One slot = (track width - 2 * p-1) / n. The track is a grid of equal columns
+// sized to the widest label, so this width and a column are the same thing.
+const slotWidth = (count) => `calc((100% - 0.5rem) / ${count})`;
 
 const ACCENTS = {
   vermillion: { indicator: 'bg-[var(--accent-vermillion)]', badge: 'bg-[var(--accent-vermillion)]' },
@@ -62,14 +62,14 @@ export default function CapsuleToggle({
     <div
       role="group"
       aria-label={label}
-      className={`relative inline-flex max-w-full rounded-full border border-[var(--border-color)] bg-[var(--surface-color)] shadow-sm ${sizing.track} ${className}`}
+      className={`relative inline-grid max-w-full grid-flow-col auto-cols-fr rounded-full border border-[var(--border-color)] bg-[var(--surface-color)] shadow-sm p-1 ${className}`}
     >
       <span
         aria-hidden="true"
         data-capsule-indicator=""
         className={`pointer-events-none absolute rounded-full shadow-xs transition-transform duration-300 ease-out motion-reduce:transition-none ${sizing.indicator} ${colours.indicator}`}
         style={{
-          width: sizing.slotWidth(options.length),
+          width: slotWidth(options.length),
           // Own-width steps line up with equal slots, so no measurement is needed
           // and the capsule keeps one size whichever option is selected.
           transform: `translateX(${index * 100}%)`
@@ -85,14 +85,14 @@ export default function CapsuleToggle({
             onClick={() => onChange?.(option.id)}
             aria-pressed={active === 'pressed' ? selected : undefined}
             aria-current={active === 'current' && selected ? 'page' : undefined}
-            className={`relative z-10 flex flex-1 basis-0 items-center justify-center gap-1.5 rounded-full whitespace-nowrap transition-colors duration-200 cursor-pointer ${sizing.item} ${
+            className={`relative z-10 flex w-full items-center justify-center gap-1.5 rounded-full whitespace-nowrap transition-colors duration-200 cursor-pointer ${sizing.item} ${
               selected
                 ? 'text-white font-bold'
                 : 'text-[var(--text-muted)] hover:text-[var(--text-color)]'
             }`}
           >
             {option.icon ? <span className="shrink-0">{option.icon}</span> : null}
-            <span className="truncate">{option.label}</span>
+            <span>{option.label}</span>
             {option.badge ? (
               <span
                 className={`ml-0.5 px-1.5 rounded-full text-[10px] font-bold text-white border border-[var(--bg-color)] ${colours.badge}`}
