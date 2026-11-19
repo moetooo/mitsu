@@ -3,7 +3,7 @@ import { Fragment, useCallback, useEffect, useState } from 'react';
 const ADMIN_BASE = new URL('./', window.location.href.replace(/\/+$/, ''));
 const THEME_KEY = 'mitsu_theme';
 const PAGE_LIMIT = 10;
-const MODES = ['all', 'manual', 'backfill', 'auto'];
+const MODES = ['all', 'manual', 'auto'];
 
 function readStored(key) {
   try {
@@ -73,17 +73,6 @@ function fmtShort(value) {
     day: 'numeric',
     hour: '2-digit',
     minute: '2-digit',
-  });
-}
-
-function fmtDateShort(value) {
-  if (!value) return '–';
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return '–';
-  return date.toLocaleString('en-US', {
-    month: 'short',
-    day: 'numeric',
-    year: 'numeric',
   });
 }
 
@@ -213,7 +202,9 @@ function GuardrailsCard({ guardrails, anilist }) {
         <h3>Guardrails</h3>
         <Pill tone={atLimit ? 'amber' : 'sage'}>{atLimit ? 'limit' : 'ok'}</Pill>
       </div>
-      <p className="desc">Run cap and manual cooldown, checked before any provider request.</p>
+      <p className="desc">
+        Real runs allowed today. Dry runs and rejected attempts spend nothing and do not count.
+      </p>
       <dl className="kv-grid">
         <div>
           <dt>Runs today</dt>
@@ -258,76 +249,6 @@ function ActionField({ id, value, max, disabled, onChange }) {
       />
       <span className="suffix">{suffix}</span>
     </div>
-  );
-}
-
-function BackfillPanel({ backfill }) {
-  const pct = Number(backfill?.percent) || 0;
-  const complete = !!backfill?.complete;
-  const method = complete
-    ? 'Complete'
-    : backfill?.progress_basis === 'pages'
-      ? 'Page-based'
-      : 'Time-based estimate';
-  const remaining = complete
-    ? 'nothing left after the cutoff'
-    : backfill?.remaining_pages != null
-      ? `${backfill.remaining_pages} pages left`
-      : backfill?.remaining_days != null
-        ? `~${backfill.remaining_days} days left (time-based estimate)`
-        : '–';
-  return (
-    <article className="panel backfill-panel">
-      <div className="backfill-top">
-        <div>
-          <span className="micro-label">Complete</span>
-          <div className="backfill-value">
-            <strong>{percentLabel(pct)}</strong>
-            <Pill tone="slate">{method}</Pill>
-          </div>
-        </div>
-        <Pill tone={complete ? 'sage' : 'amber'}>{complete ? 'complete' : 'in progress'}</Pill>
-      </div>
-      <div className="progress progress-tall" role="progressbar" aria-valuenow={pct} aria-valuemin="0" aria-valuemax="100">
-        <span
-          className="progress-fill sage"
-          style={{ width: `${Math.min(100, Math.max(0, pct))}%`, minWidth: pct > 0 ? 6 : 0 }}
-        />
-      </div>
-      <div className="panel-foot">
-        <span>{fmtDateShort(backfill?.cutoff_at)} → {fmtDateShort(new Date())}</span>
-        <span>{remaining}</span>
-      </div>
-      <div className="divider" />
-      <dl className="meta-grid">
-        <div>
-          <dt>Cutoff</dt>
-          <dd>{fmtUtcStamp(backfill?.cutoff_at)}</dd>
-          {backfill?.last_attempt_at && <small>attempted {fmtShort(backfill.last_attempt_at)}</small>}
-        </div>
-        <div>
-          <dt>Oldest processed</dt>
-          <dd>{fmtShort(backfill?.progress_at)}</dd>
-        </div>
-        <div>
-          <dt>Next page</dt>
-          <dd>{complete ? 'done' : backfill?.next_page ?? '–'}</dd>
-        </div>
-        <div>
-          <dt>Pages done</dt>
-          <dd>{backfill?.pages_done ?? 0}{backfill?.total_pages ? ` / ${backfill.total_pages}` : ' done'}</dd>
-        </div>
-        <div>
-          <dt>Last success</dt>
-          <dd>{fmtShort(backfill?.last_success_at)}</dd>
-        </div>
-        <div>
-          <dt>Reserve / limit</dt>
-          <dd>{backfill?.reserve ?? '–'} reserved / {backfill?.limit ?? '–'} max</dd>
-        </div>
-      </dl>
-      {backfill?.last_error && <p className="inline-error">Last error: {backfill.last_error}</p>}
-    </article>
   );
 }
 
@@ -481,7 +402,44 @@ async function copyText(value) {
   }
 }
 
+function requestsLabel(value) {
+  return value == null ? '–' : Number(value).toLocaleString('en-US');
+}
+
+function runRequests(run) {
+  const anilist = run.details?.anilist?.requests_attempted;
+  const mangadex = run.details?.mangadex?.requests_attempted;
+  return {
+    anilist,
+    mangadex,
+    label: `${requestsLabel(anilist)} · ${requestsLabel(mangadex)}`,
+    title: `AniList ${requestsLabel(anilist)} · MangaDex ${requestsLabel(mangadex)} requests`,
+  };
+}
+
+function guardrailText(guard) {
+  if (!guard) return '—';
+  if (guard.code) {
+    return `${guard.code} — ${guard.message}${
+      guard.retry_after ? ` · retry in ${guard.retry_after}s` : ''
+    }`;
+  }
+  const parts = [];
+  if (guard.day) parts.push(`day ${guard.day}`);
+  if (guard.runs_today != null && guard.daily_run_limit != null) {
+    parts.push(`${guard.runs_today}/${guard.daily_run_limit} runs before`);
+  }
+  if (guard.cooldown_seconds != null) parts.push(`${guard.cooldown_seconds}s cooldown`);
+  if (guard.max_pages != null) parts.push(`max ${guard.max_pages} pages`);
+  if (guard.anilist_remaining != null) parts.push(`${guard.anilist_remaining} AniList left`);
+  if (guard.retry_after) parts.push(`retry in ${guard.retry_after}s`);
+  return parts.length ? parts.join(' · ') : '—';
+}
+
 function runDetailsText(run) {
+  const guard = run.details?.guardrail;
+  const anilist = run.details?.anilist;
+  const mangadex = run.details?.mangadex;
   return [
     `Run ${run.run_id}`,
     `Mode: ${run.mode}${run.dry_run ? ' (dry run)' : ''}`,
@@ -489,10 +447,15 @@ function runDetailsText(run) {
     `Started: ${run.started_at || '—'}`,
     `Finished: ${run.finished_at || '—'}`,
     `Pages fetched: ${run.pages_fetched ?? 0}`,
-    `Requests attempted: ${run.details?.backfill?.requests_attempted ?? '—'}`,
+    `AniList requests: ${anilist?.requests_attempted ?? '—'}`,
+    `MangaDex requests: ${mangadex?.requests_attempted ?? '—'}`,
     `Rows seen: ${run.rows_seen ?? 0}`,
     `Inserted: ${run.rows_inserted ?? 0}`,
     `Updated: ${run.rows_updated ?? 0}`,
+    `Guardrail: ${guardrailText(guard)}`,
+    `AniList watermark: ${anilist?.watermark ?? '—'}${
+      anilist ? ` · ${anilist.backlog_remaining ? 'backlog left' : 'caught up'}` : ''
+    }`,
     `Details: ${JSON.stringify(run.details || {}, null, 2)}`,
     '',
     'Error:',
@@ -526,8 +489,9 @@ function RunsTable({ runs, total, page, totalPages, filter, onFilter, onPage, no
       <SectionHead title="Recent runs" note={countLabel} />
       <div className="runs-toolbar">
         <p className="desc">
-          Each row is one attempt. Pages counts successful provider pages; a retried request
-          spends daily budget without adding a page. Open a row for details and a multiline copy.
+          Each row is one attempt. <strong>Requests</strong> shows what that run actually sent to
+          AniList · MangaDex; a dry run still makes the calls but spends no daily budget. Open a row
+          for the day&apos;s guardrail state, full details, and a multiline copy.
         </p>
         <div className="filters" role="group" aria-label="Filter runs by mode">
           {MODES.map((mode) => (
@@ -550,6 +514,9 @@ function RunsTable({ runs, total, page, totalPages, filter, onFilter, onPage, no
               <th>Mode</th>
               <th>Status</th>
               <th className="num">Pages</th>
+              <th className="num" title="Provider requests this run made: AniList · MangaDex">
+                Requests
+              </th>
               <th className="num">Seen</th>
               <th className="num">New</th>
               <th className="num">Updated</th>
@@ -559,7 +526,7 @@ function RunsTable({ runs, total, page, totalPages, filter, onFilter, onPage, no
           <tbody>
             {filtered.length === 0 ? (
               <tr>
-                <td colSpan="8" className="empty-row">No runs match this filter on this page.</td>
+                <td colSpan="9" className="empty-row">No runs match this filter on this page.</td>
               </tr>
             ) : (
               filtered.map((run) => (
@@ -596,6 +563,9 @@ function RunsTable({ runs, total, page, totalPages, filter, onFilter, onPage, no
                     >
                       {Number(run.pages_fetched || 0).toLocaleString('en-US')}
                     </td>
+                    <td className="num mono" title={runRequests(run).title}>
+                      {runRequests(run).label}
+                    </td>
                     <td className="num mono">{Number(run.rows_seen || 0).toLocaleString('en-US')}</td>
                     <td className="num mono">{Number(run.rows_inserted || 0).toLocaleString('en-US')}</td>
                     <td className="num mono">{Number(run.rows_updated || 0).toLocaleString('en-US')}</td>
@@ -605,7 +575,7 @@ function RunsTable({ runs, total, page, totalPages, filter, onFilter, onPage, no
                   </tr>
                   {expanded === run.run_id && (
                     <tr className="run-detail-row" id={`run-${run.run_id}`}>
-                      <td colSpan="8">
+                      <td colSpan="9">
                         <div className="run-detail">
                           <div className="run-detail-head">
                             <span className="mono">run {run.run_id}</span>
@@ -617,6 +587,30 @@ function RunsTable({ runs, total, page, totalPages, filter, onFilter, onPage, no
                               {copied === run.run_id ? 'Copied' : 'Copy details'}
                             </button>
                           </div>
+                          <dl className="kv-grid run-facts">
+                            <div>
+                              <dt>AniList requests</dt>
+                              <dd>{requestsLabel(run.details?.anilist?.requests_attempted)}</dd>
+                            </div>
+                            <div>
+                              <dt>MangaDex requests</dt>
+                              <dd>{requestsLabel(run.details?.mangadex?.requests_attempted)}</dd>
+                            </div>
+                            <div>
+                              <dt>Guardrail</dt>
+                              <dd title={guardrailText(run.details?.guardrail)}>
+                                {guardrailText(run.details?.guardrail)}
+                              </dd>
+                            </div>
+                          </dl>
+                          {run.details?.guardrail?.code && (
+                            <p className="inline-error">
+                              {run.details.guardrail.code}: {run.details.guardrail.message}
+                              {run.details.guardrail.retry_after
+                                ? ` · retry in ${run.details.guardrail.retry_after}s`
+                                : ''}
+                            </p>
+                          )}
                           <pre>{runDetailsText(run)}</pre>
                         </div>
                       </td>
@@ -650,16 +644,16 @@ export default function DashboardApp() {
   const [updatedAt, setUpdatedAt] = useState(null);
   const [filter, setFilter] = useState('all');
   const [manualPages, setManualPages] = useState(1);
-  const [backfillPages, setBackfillPages] = useState(5);
 
   const manualMax = Math.max(0, Number(data?.limits?.manual_pages) || 0);
-  const backfillMax = Math.max(0, Number(data?.limits?.backfill_pages) || 0);
   const anilist = data?.budgets?.anilist;
   const mangadex = data?.budgets?.mangadex;
   const guardrails = data?.guardrails;
-  const backfill = data?.backfill;
   const autoEnabled = !!data?.auto_enabled;
-  const complete = !!backfill?.complete;
+  const auto = data?.auto;
+  const runLimit = Math.max(0, Number(guardrails?.daily_run_limit) || 0);
+  const runsToday = Math.max(0, Number(guardrails?.runs_today) || 0);
+  const runLimitReached = runLimit > 0 && runsToday >= runLimit;
   const totalRuns = Number(data?.runs_total) || 0;
   const totalPages = Math.max(1, Math.ceil(totalRuns / PAGE_LIMIT));
   const activeRun = runs.some((run) => run.status === 'running');
@@ -682,10 +676,6 @@ export default function DashboardApp() {
   useEffect(() => {
     setManualPages((value) => (manualMax > 0 ? Math.min(Math.max(1, value || 1), manualMax) : 0));
   }, [manualMax]);
-
-  useEffect(() => {
-    setBackfillPages((value) => (backfillMax > 0 ? Math.min(Math.max(1, value || 1), backfillMax) : 0));
-  }, [backfillMax]);
 
   const loadPage = useCallback(async (index = 0, silent = false) => {
     if (!silent) setLoading(true);
@@ -782,20 +772,15 @@ export default function DashboardApp() {
 
   const trigger = async (kind) => {
     setBusy(kind);
-    const label = kind === 'backfill' ? 'Backfill' : 'Manual sync';
     try {
-      const path =
-        kind === 'backfill'
-          ? `backfill?max_pages=${backfillPages}`
-          : `sync?mode=manual&max_pages=${manualPages}`;
-      const body = await api(path, 'POST');
-      notify(`${label} queued · ${String(body.run_id || '').slice(0, 8) || 'accepted'}`);
+      const body = await api(`sync?mode=${kind}&max_pages=${manualPages}`, 'POST');
+      notify(`Manual sync queued · ${String(body.run_id || '').slice(0, 8) || 'accepted'}`);
       setFilter('all');
       setTimeout(() => loadPage(0, true), 1000);
       setTimeout(() => loadPage(0, true), 6000);
     } catch (err) {
       const wait = err.retry ? ` Retry in ${duration(Number(err.retry))}.` : '';
-      notify(`${label} rejected: ${err.message}${wait}`, true);
+      notify(`Manual sync rejected: ${err.message}${wait}`, true);
       if (err.status === 401) {
         setAuth((current) => ({
           ...(current || {}),
@@ -882,7 +867,7 @@ export default function DashboardApp() {
                 <span className="brand-tag">MITSU</span>
               </div>
               <p className="subtitle">
-                AniList and MangaDex synchronization, budgets, and resumable backfill{' '}
+                AniList and MangaDex synchronization, provider budgets, and run history{' '}
                 <span className="updated">{updatedAt ? `updated ${fmtTime(updatedAt)}` : 'updated –'}</span>
               </p>
             </div>
@@ -931,7 +916,7 @@ export default function DashboardApp() {
           <div className="grid grid-3">
             <QuotaCard
               name="AniList"
-              description="Daily request budget shared by sync and backfill pages."
+              description="Daily request budget for catalog sync."
               budget={anilist}
             />
             <QuotaCard
@@ -948,24 +933,30 @@ export default function DashboardApp() {
             title="Run a sync"
             note="One-off actions. The scheduled job is controlled separately."
           />
-          <div className="grid grid-3">
+          <div className="grid grid-2">
             <article className="panel action-panel">
               <div className="panel-top">
                 <h3>Manual sync</h3>
-                <Pill tone={manualMax > 0 ? 'slate' : 'amber'}>
-                  {manualMax > 0 ? `max ${manualMax}` : 'no requests'}
+                <Pill tone={runLimitReached || manualMax <= 0 ? 'amber' : 'slate'}>
+                  {runLimitReached ? 'daily limit' : manualMax > 0 ? `max ${manualMax}` : 'no requests'}
                 </Pill>
               </div>
               <p className="desc">
                 Fetches recent AniList changes and refreshes MangaDex links. Each page spends
-                provider requests.
+                provider requests, and each run counts toward the daily run limit.
               </p>
+              {runLimitReached && (
+                <p className="inline-error">
+                  Daily run limit reached ({runsToday}/{runLimit}). Resets{' '}
+                  {fmtUtcStamp(guardrails?.day_reset_at)}.
+                </p>
+              )}
               <div className="action-bottom">
                 <ActionField
                   id="manual-pages"
                   value={manualPages}
                   max={manualMax}
-                  disabled={manualMax <= 0 || !!busy}
+                  disabled={manualMax <= 0 || runLimitReached || !!busy}
                   onChange={(value) =>
                     setManualPages(Math.max(1, Math.min(manualMax, Number(value) || 1)))
                   }
@@ -974,49 +965,22 @@ export default function DashboardApp() {
                   type="button"
                   className="btn action-btn"
                   onClick={() => trigger('manual')}
-                  disabled={manualMax <= 0 || !!busy}
+                  disabled={manualMax <= 0 || runLimitReached || !!busy}
                 >
-                  {busy === 'manual' ? 'Queuing…' : manualMax > 0 ? 'Run manual sync' : 'No requests left'}
-                </button>
-              </div>
-            </article>
-
-            <article className="panel action-panel">
-              <div className="panel-top">
-                <h3>Backfill</h3>
-                <Pill tone={backfillMax > 0 && !complete ? 'slate' : 'amber'}>
-                  {complete ? 'complete' : backfillMax > 0 ? `max ${backfillMax}` : 'no requests'}
-                </Pill>
-              </div>
-              <p className="desc">
-                Walks AniList history toward the cutoff. Resumable, and keeps a reserve for the
-                daily sync.
-              </p>
-              <div className="action-bottom">
-                <ActionField
-                  id="backfill-pages"
-                  value={backfillPages}
-                  max={backfillMax}
-                  disabled={backfillMax <= 0 || complete || !!busy}
-                  onChange={(value) =>
-                    setBackfillPages(Math.max(1, Math.min(backfillMax, Number(value) || 1)))
-                  }
-                />
-                <button
-                  type="button"
-                  className="btn action-btn"
-                  onClick={() => trigger('backfill')}
-                  disabled={backfillMax <= 0 || complete || !!busy}
-                >
-                  {busy === 'backfill'
+                  {busy === 'manual'
                     ? 'Queuing…'
-                    : complete
-                      ? 'Backfill complete'
-                      : backfillMax > 0
-                        ? 'Advance backfill'
-                        : 'Backfill paused'}
+                    : runLimitReached
+                      ? 'Daily limit reached'
+                      : manualMax > 0
+                        ? 'Run manual sync'
+                        : 'No requests left'}
                 </button>
               </div>
+              <p className="footnote">
+                A dry run checks the budget without spending it; only real runs use the day's
+                allowance. Next manual trigger:{' '}
+                {guardrails?.next_manual_at ? fmtShort(guardrails.next_manual_at) : 'now'}.
+              </p>
             </article>
 
             <article className="panel action-panel">
@@ -1025,8 +989,9 @@ export default function DashboardApp() {
                 <Pill tone={autoEnabled ? 'sage' : 'slate'}>{autoEnabled ? 'on' : 'off'}</Pill>
               </div>
               <p className="desc">
-                Permits the external scheduler to run <code className="chip">mode=auto</code>. Off
-                by default; manual actions still work.
+                Permits the external scheduler to run <code className="chip">mode=auto</code>.
+                The PC-online prompt asks first and runs at most once per local day
+                ({auto?.day_tz || 'Asia/Kolkata'}). Manual actions are unaffected.
               </p>
               <label className="switch-row">
                 <input
@@ -1046,22 +1011,43 @@ export default function DashboardApp() {
                 </div>
                 <div>
                   <dt>Trigger</dt>
-                  <dd>scheduler</dd>
+                  <dd>PC online prompt</dd>
+                </div>
+                <div>
+                  <dt>Today</dt>
+                  <dd>
+                    {auto?.runs_today ?? 0} / {auto?.daily_limit ?? 1}
+                    {auto?.ran_today ? ' · done' : ' · pending'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Last auto run</dt>
+                  <dd>
+                    {auto?.last_started_at
+                      ? `${fmtShort(auto.last_started_at)} · ${auto.last_status}${
+                          auto.last_rows_changed != null ? ` · ${auto.last_rows_changed} changed` : ''
+                        }`
+                      : 'never'}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Gap</dt>
+                  <dd>
+                    {auto?.backlog_remaining == null
+                      ? '–'
+                      : auto.backlog_remaining
+                        ? 'backlog left — next run continues'
+                        : 'caught up'}
+                  </dd>
                 </div>
               </dl>
               <div className="action-spacer" />
               <div className="divider" />
-              <p className="footnote">Stored in the database. Use exactly one external scheduler.</p>
+              <p className="footnote">
+                Stored in the database. Next prompt after {fmtShort(auto?.next_prompt_after) || 'local midnight'}.
+              </p>
             </article>
           </div>
-        </section>
-
-        <section className="section">
-          <SectionHead
-            title="Backfill progress"
-            note="From the UTC cutoff to now. The cursor only moves forward."
-          />
-          <BackfillPanel backfill={backfill} />
         </section>
 
         <RunsTable
@@ -1079,7 +1065,7 @@ export default function DashboardApp() {
         <footer className="page-foot">
           <span>
             Budget day {guardrails?.day || '–'} · resets {fmtUtcStamp(guardrails?.day_reset_at)} ·
-            backfill cutoff {fmtUtcStamp(backfill?.cutoff_at)}
+            runs today {runsToday} / {runLimit || '–'}
           </span>
           <span>Internal admin page · UTC budgets</span>
         </footer>

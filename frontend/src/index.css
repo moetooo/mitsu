@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* Micro-labels, badges and ticks are monospace everywhere in the UI, and the
+   app already loads JetBrains Mono: wire the utility to it instead of letting
+   Tailwind fall back to the OS monospace stack. */
+@theme {
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
 /* Custom Text Selection Highlight */
 ::selection {
   background: var(--accent-vermillion);
@@ -10,19 +17,63 @@
   color: #ffffff;
 }
 
-:root, :root[data-theme="sumi"] {
+/* Base palette, used when no theme attribute is present (first paint) and as the
+   fallback for anything a theme block below does not override. Dark Ink was the
+   third theme and is gone; Paper Light and AMOLED each override what they need. */
+:root {
   --bg-color: #12151d;
   --surface-color: #1a1e29;
   --surface-hover: #222836;
   --text-color: #ede8dc;
   --text-muted: #949086;
-  --accent-vermillion: #c33d2e;
+  --accent-vermillion: #e11d48;
   --accent-indigo: #5a71a0;
+  /* B-10: the "windowing" badge in MangaGrid asked for this token and no theme
+     defined it, so the text inherited its colour. Defined per theme like the others. */
+  --accent-emerald: #5cb87a;
   --border-color: rgba(90, 113, 160, 0.18);
-  --hanko-border: #c33d2e;
-  --hanko-bg: rgba(195, 61, 46, 0.15);
-  --font-heading: 'Shippori Mincho', 'Noto Serif JP', serif;
-  --font-body: 'Zen Kaku Gothic New', 'Inter', sans-serif;
+  --seal-border: var(--accent-vermillion);
+  --seal-bg: color-mix(in srgb, var(--accent-vermillion) 15%, transparent);
+  /* Instrument panel (filter drawer). Its own scale so the controls read as one
+     slab of glass rather than four loose cards -- but themed, so the light theme gets light
+     cards and amoled goes to true black instead of a dark island. */
+  --panel-bg: #0c0c0f;
+  --panel-card: #121216;
+  --panel-border: #25252e;
+  --panel-border-hover: #353542;
+  --panel-track: #070709;
+  --panel-track-border: #18181e;
+  /* Follows the accent palette chosen in Settings (data-accent), so the panel is
+     never a different red from the rest of the app. */
+  --panel-accent: var(--accent-vermillion);
+  --panel-thumb: #0c0c0f;
+  /* Explore hero banner (HeroBanner.jsx). Every colour the banner paints lives here,
+     because the same sheet of art sits on a near-black page in AMOLED and on paper
+     in the light theme: the washes, the gradient stops, the text ink and the little
+     chips have to flip with the theme or the light banner is a black slab with white
+     text bleeding into a paper-white fade. `--hero-art-opacity` is the wash strength
+     over the blurred art -- the paper theme needs it fainter to stay a texture
+     rather than a photo competing with the covers below it. */
+  --hero-veil: rgba(0, 0, 0, 0.70);
+  --hero-art-opacity: 0.50;
+  --hero-scrim-from: var(--bg-color);
+  --hero-scrim-via: rgba(0, 0, 0, 0.40);
+  --hero-scrim-to: rgba(0, 0, 0, 0.30);
+  --hero-side-from: rgba(0, 0, 0, 0.90);
+  --hero-side-via: rgba(0, 0, 0, 0.60);
+  --hero-ink: #ffffff;
+  --hero-ink-muted: rgba(255, 255, 255, 0.80);
+  --hero-ink-soft: rgba(255, 255, 255, 0.70);
+  --hero-ink-shadow: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.45));
+  --hero-chip-bg: rgba(0, 0, 0, 0.60);
+  --hero-chip-bg-hover: rgba(0, 0, 0, 0.90);
+  --hero-chip-border: rgba(255, 255, 255, 0.20);
+  --hero-thumb-border: rgba(255, 255, 255, 0.20);
+  --hero-thumb-bg: rgba(0, 0, 0, 0.40);
+  --hero-dot: rgba(255, 255, 255, 0.40);
+  --hero-dot-hover: rgba(255, 255, 255, 0.80);
+  --font-heading: 'Playfair Display', Georgia, serif;
+  --font-body: 'Inter', system-ui, sans-serif;
 }
 
 :root[data-theme="washi"] {
@@ -31,13 +82,44 @@
   --surface-hover: #dfd8c7;
   --text-color: #1a1a1a;
   --text-muted: #666258;
-  --accent-vermillion: #c33d2e;
+  --accent-vermillion: #e11d48;
   --accent-indigo: #2a3a5c;
+  --accent-emerald: #2e7d32;
   --border-color: rgba(42, 58, 92, 0.15);
-  --hanko-border: #f59e0b;
-  --hanko-bg: rgba(234, 228, 214, 0.95);
-  --font-heading: 'Shippori Mincho', 'Noto Serif JP', serif;
-  --font-body: 'Zen Kaku Gothic New', 'Inter', sans-serif;
+  --seal-border: #f59e0b;
+  --seal-bg: rgba(234, 228, 214, 0.95);
+  --panel-bg: #ece6d8;
+  --panel-card: #f8f5ec;
+  --panel-border: rgba(42, 58, 92, 0.16);
+  --panel-border-hover: rgba(42, 58, 92, 0.34);
+  --panel-track: #ddd5c3;
+  --panel-track-border: #cdc4b0;
+  --panel-accent: var(--accent-vermillion);
+  --panel-thumb: #f8f5ec;
+  /* Paper Light: the banner becomes a light card. The art is washed towards the
+     page colour instead of blackened, the scrims fade into paper, and the ink flips
+     to the theme text colour so the title does not turn into a dark block on a
+     cream page. There is no text shadow: a dark halo around dark type is mud. */
+  --hero-veil: rgba(246, 243, 235, 0.74);
+  --hero-art-opacity: 0.30;
+  --hero-scrim-from: var(--bg-color);
+  --hero-scrim-via: rgba(246, 243, 235, 0.58);
+  --hero-scrim-to: rgba(246, 243, 235, 0.34);
+  --hero-side-from: rgba(246, 243, 235, 0.96);
+  --hero-side-via: rgba(246, 243, 235, 0.62);
+  --hero-ink: var(--text-color);
+  --hero-ink-muted: rgba(26, 26, 26, 0.78);
+  --hero-ink-soft: rgba(26, 26, 26, 0.66);
+  --hero-ink-shadow: none;
+  --hero-chip-bg: rgba(246, 243, 235, 0.86);
+  --hero-chip-bg-hover: #f6f3eb;
+  --hero-chip-border: rgba(42, 58, 92, 0.22);
+  --hero-thumb-border: rgba(42, 58, 92, 0.28);
+  --hero-thumb-bg: rgba(42, 58, 92, 0.08);
+  --hero-dot: rgba(26, 26, 26, 0.24);
+  --hero-dot-hover: rgba(26, 26, 26, 0.55);
+  --font-heading: 'Playfair Display', Georgia, serif;
+  --font-body: 'Inter', system-ui, sans-serif;
 }
 
 :root[data-theme="amoled"], :root[data-theme="classic"] {
@@ -46,18 +128,109 @@
   --surface-hover: #171717;
   --text-color: #f5f5f7;
   --text-muted: #8e8e93;
-  --accent-vermillion: #ff3b30;
+  --accent-vermillion: #e11d48;
   --accent-indigo: #0a84ff;
+  --accent-emerald: #34d399;
   --border-color: rgba(255, 255, 255, 0.14);
-  --hanko-border: #fbbf24;
-  --hanko-bg: rgba(13, 13, 13, 0.95);
-  --font-heading: 'Shippori Mincho', 'Noto Serif JP', serif;
-  --font-body: 'Zen Kaku Gothic New', 'Inter', sans-serif;
+  --seal-border: #fbbf24;
+  --seal-bg: rgba(13, 13, 13, 0.95);
+  --panel-bg: #000000;
+  --panel-card: #0a0a0a;
+  --panel-border: rgba(255, 255, 255, 0.14);
+  --panel-border-hover: rgba(255, 255, 255, 0.30);
+  --panel-track: #050505;
+  --panel-track-border: #1c1c1c;
+  --panel-accent: var(--accent-vermillion);
+  --panel-thumb: #000000;
+  /* AMOLED: true black underneath, so the scrims have to go all the way to zero
+     instead of stopping at a grey that would glow against the panel. The art is
+     washed slightly harder, and the chips sit closer to opaque black. */
+  --hero-veil: rgba(0, 0, 0, 0.80);
+  --hero-art-opacity: 0.45;
+  --hero-scrim-from: var(--bg-color);
+  --hero-scrim-via: rgba(0, 0, 0, 0.60);
+  --hero-scrim-to: rgba(0, 0, 0, 0.40);
+  --hero-side-from: rgba(0, 0, 0, 0.96);
+  --hero-side-via: rgba(0, 0, 0, 0.68);
+  --hero-ink: #f5f5f7;
+  --hero-ink-muted: rgba(245, 245, 247, 0.78);
+  --hero-ink-soft: rgba(245, 245, 247, 0.64);
+  --hero-ink-shadow: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.7));
+  --hero-chip-bg: rgba(0, 0, 0, 0.72);
+  --hero-chip-bg-hover: #000000;
+  --hero-chip-border: rgba(255, 255, 255, 0.18);
+  --hero-thumb-border: rgba(255, 255, 255, 0.20);
+  --hero-thumb-bg: rgba(0, 0, 0, 0.55);
+  --hero-dot: rgba(245, 245, 247, 0.32);
+  --hero-dot-hover: rgba(245, 245, 247, 0.85);
+  --font-heading: 'Playfair Display', Georgia, serif;
+  --font-body: 'Inter', system-ui, sans-serif;
+}
+
+/* Skeleton shimmer + missing-cover tile (Feature 34 / CoverFallback).
+   Both used to be painted with near-black literals, which survived every theme
+   switch: on the paper theme a loading cover showed a dark wave sweeping over a
+   cream card, and a dead cover was a black slab in a light grid. They are tokens
+   now, so each theme sweeps its own surface colour and the fallback tile is a
+   darker sheet of the same paper instead of a hole in the page. */
+:root {
+  --shimmer-base: var(--surface-color);
+  /* 18% text ink over the surface: a faint band, not a spotlight. */
+  --shimmer-sheen: color-mix(in srgb, var(--surface-color) 82%, var(--text-color));
+  --cover-fallback-from: #181920;
+  --cover-fallback-via: #121318;
+  --cover-fallback-to: #0a0a0d;
+  /* Decorative fade along the foot of a poster in the grid. It anchors the art on
+     a dark card; on paper it dissolves the art into the sheet instead of laying a
+     near-black slab under a cream card. */
+  --cover-art-fade-from: rgba(0, 0, 0, 0.80);
+  --cover-art-fade-via: rgba(0, 0, 0, 0.20);
+  /* Age / content warning chip. It stays an alert in every theme, but on paper
+     it is a solid warning red rather than a black slab over a light cover. */
+  --warn-chip-bg: rgba(0, 0, 0, 0.85);
+  --warn-chip-ink: #f87171;
+  --warn-chip-border: rgba(239, 68, 68, 0.5);
+}
+
+:root[data-theme="washi"] {
+  --shimmer-base: var(--surface-color);
+  /* Paper light: the highlight goes towards white, never towards ink, or the
+     "shimmer" reads as a black wave on a cream page. */
+  --shimmer-sheen: #fffdf6;
+  --cover-fallback-from: #f8f5ee;
+  --cover-fallback-via: #f0ebdf;
+  --cover-fallback-to: #e6dfd0;
+  --cover-art-fade-from: rgba(246, 243, 235, 0.72);
+  --cover-art-fade-via: rgba(246, 243, 235, 0.14);
+  --warn-chip-bg: rgba(185, 28, 28, 0.95);
+  --warn-chip-ink: #fff5f5;
+  --warn-chip-border: rgba(255, 255, 255, 0.40);
+}
+
+:root[data-theme="amoled"], :root[data-theme="classic"] {
+  --shimmer-base: var(--surface-color);
+  /* True black: keep the band just above the panel so it does not glow. */
+  --shimmer-sheen: color-mix(in srgb, var(--surface-color) 88%, var(--text-color));
+  --cover-fallback-from: #101010;
+  --cover-fallback-via: #0a0a0a;
+  --cover-fallback-to: #000000;
+  --cover-art-fade-from: rgba(0, 0, 0, 0.88);
+  --cover-art-fade-via: rgba(0, 0, 0, 0.25);
+  --warn-chip-bg: rgba(0, 0, 0, 0.90);
+  --warn-chip-ink: #f87171;
+  --warn-chip-border: rgba(239, 68, 68, 0.5);
 }
 
 html {
   overflow-y: scroll;
+  /* A horizontal gesture that reaches the end of a rail inside the detail
+     modal must not pan the page sideways; the rail owns its axis. */
+  overflow-x: hidden;
   scrollbar-gutter: stable;
+}
+
+.rail-scroll {
+  overscroll-behavior-x: contain;
 }
 
 body {
@@ -74,12 +247,110 @@ body {
   transition: background-color 300ms ease, color 300ms ease, border-color 300ms ease;
 }
 
-h1, h2, h3, .font-serif-jp {
+h1, h2, h3, .font-heading {
   font-family: var(--font-heading);
 }
 
-.font-sans-jp {
+.font-body {
   font-family: var(--font-body);
+}
+
+/* The app's accent ring, in one place. `--accent-vermillion` is remapped per
+   data-accent, so the ring is always the palette's colour instead of a fixed one.
+   --glow-ring          hover / focus: 2px at 60% + an 18px halo at 25% */
+:root {
+  --glow-ring:
+    0 0 0 2px color-mix(in srgb, var(--accent-vermillion) 60%, transparent),
+    0 0 18px color-mix(in srgb, var(--accent-vermillion) 25%, transparent);
+
+  /* Master tile geometry. Every option card in Settings reads these four values,
+     so the panel cannot drift back to five paddings, three radii and two heading
+     sizes. Change one of them here and all 19 tiles follow. */
+  --tile-radius: 12px;
+  --tile-pad: 5px 8px;
+  --tile-min-height: 38px;
+  --tile-font: 0.6875rem;
+  --group-pad: 12px;
+}
+
+.accent-glow-ring:focus-within,
+.icon-button-accent:hover,
+.option-tile:not([aria-pressed="true"]):not(:disabled):not([aria-disabled="true"]):hover,
+.option-switch:not(:disabled):not([aria-disabled="true"]):hover,
+.option-tile:focus-visible,
+.option-switch:focus-visible {
+  box-shadow: var(--glow-ring);
+}
+
+/* Only the ring changes on hover for the header icon buttons: the icon colour and
+   border stay as they are. */
+.icon-button-accent {
+  transition: box-shadow 200ms ease;
+}
+
+/* Option tiles: every choice in the Settings panel (theme, accent palette, title
+   font, grid density, cover-length presets). Geometry, border, background and text
+   size come from here only -- the components pass layout and content, never a
+   padding or a radius. */
+.option-tile {
+  border-radius: var(--tile-radius);
+  padding: var(--tile-pad);
+  min-height: var(--tile-min-height);
+  border: 1px solid var(--border-color);
+  background-color: color-mix(in srgb, var(--bg-color) 50%, transparent);
+  color: var(--text-muted);
+  font-size: var(--tile-font);
+  /* One line box for every tile: the mono and heading faces have different default
+     line-heights, which is what made 52px, 56px and 58px tiles sit in one panel. */
+  line-height: 1.2;
+  transition: box-shadow 160ms ease, border-color 160ms ease,
+              background-color 160ms ease, color 160ms ease;
+}
+
+.option-tile:not([aria-pressed="true"]):not(:disabled):hover {
+  color: var(--text-color);
+}
+
+.option-tile:focus-visible,
+.option-switch:focus-visible {
+  outline: none;
+}
+
+/* Chosen option: the header's active tab, exactly -- accent fill, white text, bold.
+   No tile carries its own colour any more (the theme chips and the palette were
+   removed), so a filled tile cannot hide the colour it is showing. */
+.option-tile[aria-pressed="true"] {
+  border-color: var(--accent-vermillion);
+  background-color: var(--accent-vermillion);
+  color: #fff;
+  font-weight: 700;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+
+/* Section cards inside the panel (Content Preferences, Surprise Me Cover Length)
+   take their radius from the same master token as the tiles, so a card and a tile
+   never disagree about the corner. */
+.option-group {
+  border: 1px solid var(--border-color);
+  border-radius: var(--tile-radius);
+  background-color: color-mix(in srgb, var(--bg-color) 50%, transparent);
+  padding: var(--group-pad);
+}
+
+/* The two switches share the hover ring but none of the tile box. */
+.option-switch {
+  transition: box-shadow 160ms ease, background-color 160ms ease, border-color 160ms ease;
+}
+
+/* A control that cannot be clicked never glows -- no hover halo, no focus ring,
+   and no selected outline. Declared last so it wins over the rules above. */
+.option-tile:disabled,
+.option-tile[aria-disabled="true"],
+.option-switch:disabled,
+.option-switch[aria-disabled="true"] {
+  box-shadow: none;
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* Feature 78 + 100+ grid results: one card block. The GPU-offload properties
@@ -131,7 +402,7 @@ h1, h2, h3, .font-serif-jp {
 
 
 /* Fast, Lightweight Subtle Backdrop Gradient (No Laggy SVG Filters) */
-.washi-paper-overlay {
+.app-backdrop {
   background-image: radial-gradient(circle at 50% 0%, var(--surface-color) 0%, var(--bg-color) 80%);
 }
 
@@ -146,10 +417,10 @@ h1, h2, h3, .font-serif-jp {
 
 /* Dynamic Title Font Option Overrides */
 :root[data-title-font="serif"] {
-  --font-heading: 'Shippori Mincho', 'Noto Serif JP', Georgia, serif;
+  --font-heading: 'Playfair Display', Georgia, serif;
 }
 :root[data-title-font="sans"] {
-  --font-heading: 'Zen Kaku Gothic New', 'Inter', system-ui, sans-serif;
+  --font-heading: 'Inter', system-ui, sans-serif;
 }
 :root[data-title-font="mono"] {
   --font-heading: 'JetBrains Mono', 'Space Mono', monospace;
@@ -160,24 +431,24 @@ h1, h2, h3, .font-serif-jp {
 
 /* Dynamic Accent Color Palette Overrides */
 :root[data-accent="vermillion"] {
-  --accent-vermillion: #c33d2e;
-  --hanko-border: #c33d2e;
+  --accent-vermillion: #e11d48;
+  --seal-border: var(--accent-vermillion);
 }
 :root[data-accent="gold"] {
   --accent-vermillion: #d97706;
-  --hanko-border: #d97706;
+  --seal-border: #d97706;
 }
 :root[data-accent="emerald"] {
   --accent-vermillion: #2e7d32;
-  --hanko-border: #2e7d32;
+  --seal-border: #2e7d32;
 }
 :root[data-accent="indigo"] {
   --accent-vermillion: #4a69bd;
-  --hanko-border: #4a69bd;
+  --seal-border: #4a69bd;
 }
 :root[data-accent="rose"] {
   --accent-vermillion: #e11d48;
-  --hanko-border: #e11d48;
+  --seal-border: #e11d48;
 }
 
 /* Finalized Ink Crest Circular Seal (Symmetrical 28px x 28px matching bookmark button) */
@@ -211,16 +482,8 @@ h1, h2, h3, .font-serif-jp {
 }
 
 
-/* Vertical Text Sidebar Utility */
-.vertical-text {
-  writing-mode: vertical-rl;
-  text-orientation: mixed;
-  letter-spacing: 0.15em;
-}
-
 /* Custom Scrollbars */
-.custom-scrollbar::-webkit-scrollbar {
-  width: 5px;
+.custom-scrollbar::-webkit-scrollbar {  width: 5px;
   height: 5px;
 }
 
@@ -235,6 +498,257 @@ h1, h2, h3, .font-serif-jp {
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--accent-indigo);
+}
+
+/* The only scroll container allowed inside a rounded panel.
+   A native scrollbar is painted in the element's border box, so putting
+   `overflow-y: auto` on the rounded box itself draws the bar square through
+   the corner curve. The rule for every scroller on the site is: the rounded
+   panel owns `border-radius` + `overflow: hidden`, and this child does the
+   scrolling. The panel then clips the scrollbar to its own curve.
+   `min-height: 0` lets it shrink inside a flex column; `overscroll-behavior`
+   keeps a wheel at the end of the list from moving the page behind it. */
+.panel-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Surprise Me card text. The numbers live in SURPRISE_CARD_TEXT
+   (SurpriseView.jsx) and arrive here as custom properties on the card, so the
+   component states a value once and the responsive rule below stays in CSS. */
+.surprise-card-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--surprise-title-lines, 1);
+  line-clamp: var(--surprise-title-lines, 1);
+  overflow: hidden;
+  word-break: break-word;
+  font-size: var(--surprise-title-size, 1rem);
+  font-weight: var(--surprise-title-weight, 700);
+  line-height: var(--surprise-title-leading, 1.375);
+  letter-spacing: var(--surprise-title-tracking, -0.01em);
+}
+
+@media (min-width: 640px) {
+  .surprise-card-title {
+    font-size: var(--surprise-title-size-sm, 1.125rem);
+  }
+}
+
+.surprise-card-meta {
+  font-size: var(--surprise-meta-size, 0.6875rem);
+  font-weight: var(--surprise-meta-weight, 400);
+  line-height: var(--surprise-meta-leading, 1.4);
+  letter-spacing: var(--surprise-meta-tracking, 0);
+}
+
+/* Status pill at the top-left of the card. Knobs: SURPRISE_CARD_TEXT.STATUS_*. */
+.surprise-card-status {
+  font-size: var(--surprise-status-size, 9px);
+  font-weight: var(--surprise-status-weight, 400);
+  letter-spacing: var(--surprise-status-tracking, 0.1em);
+  padding: var(--surprise-status-pad-y, 4px) var(--surprise-status-pad-x, 12px);
+  border-radius: var(--surprise-status-radius, 9999px);
+}
+
+/* Synopsis excerpt in the hover reveal. Knobs: SURPRISE_CARD_TEXT.SYNOPSIS_*. */
+.surprise-card-synopsis {
+  font-size: var(--surprise-synopsis-size, 12px);
+  line-height: var(--surprise-synopsis-leading, 1.625);
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: var(--surprise-synopsis-lines-mobile, 2);
+  line-clamp: var(--surprise-synopsis-lines-mobile, 2);
+  overflow: hidden;
+}
+
+@media (min-width: 640px) {
+  .surprise-card-synopsis {
+    -webkit-line-clamp: var(--surprise-synopsis-lines, 3);
+    line-clamp: var(--surprise-synopsis-lines, 3);
+  }
+}
+
+/* "Full Details" button in the hover reveal. Knobs: SURPRISE_CARD_TEXT.BUTTON_*. */
+.surprise-card-action {
+  font-size: var(--surprise-button-size, 12px);
+  font-weight: var(--surprise-button-weight, 700);
+  letter-spacing: var(--surprise-button-tracking, 0.05em);
+  padding-block: var(--surprise-button-pad-y, 10px);
+  border-radius: var(--surprise-button-radius, 9999px);
+}
+
+/* Two placements for the Surprise Me title / genre / year block:
+   TEXT_OFFSET_Y at rest, TEXT_OFFSET_Y_HOVER once hovered or expanded.
+   These are positions, not a movement effect, so there is no transition. */
+[data-card-text] {
+  transform: translateY(var(--surprise-text-y, 0px));
+}
+
+.group:hover [data-card-text],
+[data-surprise-card][data-expanded="true"] [data-card-text] {
+  transform: translateY(var(--surprise-text-y-hover, var(--surprise-text-y, 0px)));
+}
+
+
+/* Compact dual-thumb range sliders (filter drawer).
+   Two native inputs share one track: the thumbs stay keyboard-operable and the
+   browser keeps the slider semantics. Colours come from the theme tokens, so the
+   control follows the dark / light / black themes instead of hardcoding a palette. */
+.compact-range input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  position: absolute;
+  width: 100%;
+  height: 0;
+  margin: 0;
+  background: transparent;
+  outline: none;
+  pointer-events: none;
+}
+
+.compact-range input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  pointer-events: auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 9999px;
+  background: var(--panel-thumb);
+  border: 2.5px solid var(--panel-accent);
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+/* Idle is a hollow ring with no halo. Hover and keyboard focus only fill the
+   thumb; the crimson glow is reserved for the drag itself, so a drawer full of
+   sliders stays quiet until someone is actually moving one. */
+.compact-range input[type="range"]:hover::-webkit-slider-thumb,
+.compact-range input[type="range"]:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.12);
+  background: color-mix(in srgb, var(--panel-accent) 18%, var(--panel-thumb));
+  box-shadow: none;
+}
+
+.compact-range input[type="range"]:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+  background: color-mix(in srgb, var(--panel-accent) 18%, var(--panel-thumb));
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--panel-accent) 25%, transparent),
+    0 0 10px color-mix(in srgb, var(--panel-accent) 45%, transparent);
+}
+
+.compact-range input[type="range"]::-moz-range-thumb {
+  pointer-events: auto;
+  width: 15px;
+  height: 15px;
+  border-radius: 9999px;
+  background: var(--panel-thumb);
+  border: 2.5px solid var(--panel-accent);
+  cursor: pointer;
+  transition: transform 120ms ease, background-color 120ms ease, box-shadow 120ms ease;
+}
+
+.compact-range input[type="range"]:hover::-moz-range-thumb,
+.compact-range input[type="range"]:focus-visible::-moz-range-thumb {
+  background: color-mix(in srgb, var(--panel-accent) 18%, var(--panel-thumb));
+  box-shadow: none;
+}
+
+.compact-range input[type="range"]:active::-moz-range-thumb {
+  transform: scale(1.15);
+  background: color-mix(in srgb, var(--panel-accent) 18%, var(--panel-thumb));
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--panel-accent) 25%, transparent),
+    0 0 10px color-mix(in srgb, var(--panel-accent) 45%, transparent);
+}
+
+.compact-range input[type="range"]::-moz-range-track {
+  background: transparent;
+}
+
+/* Single-thumb range slider in the Settings panel (Surprise Me cover length).
+   `appearance: none` switches off the browser's own track and thumb, so both
+   must be drawn here -- without these rules the control rendered as an empty
+   6px bar with nothing to grab. The fill follows the value through
+   `--range-pct`, which the component sets inline. */
+.settings-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 18px;
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  cursor: pointer;
+}
+
+.settings-range::-webkit-slider-runnable-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--accent-vermillion) var(--range-pct, 50%),
+    var(--border-color) var(--range-pct, 50%)
+  );
+}
+
+.settings-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  /* Centre a 15px thumb on the 4px track. */
+  margin-top: -5.5px;
+  border-radius: 9999px;
+  background: var(--panel-thumb);
+  border: 2px solid var(--accent-vermillion);
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
+}
+
+.settings-range:hover::-webkit-slider-thumb,
+.settings-range:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.12);
+  background: color-mix(in srgb, var(--accent-vermillion) 18%, var(--panel-thumb));
+}
+
+.settings-range:active::-webkit-slider-thumb {
+  transform: scale(1.15);
+  box-shadow:
+    0 0 0 4px color-mix(in srgb, var(--accent-vermillion) 25%, transparent),
+    0 0 10px color-mix(in srgb, var(--accent-vermillion) 45%, transparent);
+}
+
+.settings-range:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--accent-vermillion) 60%, transparent);
+  outline-offset: 4px;
+  border-radius: 9999px;
+}
+
+.settings-range::-moz-range-track {
+  height: 4px;
+  border-radius: 9999px;
+  background: linear-gradient(
+    to right,
+    var(--accent-vermillion) var(--range-pct, 50%),
+    var(--border-color) var(--range-pct, 50%)
+  );
+}
+
+.settings-range::-moz-range-thumb {
+  width: 15px;
+  height: 15px;
+  border-radius: 9999px;
+  background: var(--panel-thumb);
+  border: 2px solid var(--accent-vermillion);
+  cursor: pointer;
+  transition: transform 120ms ease, box-shadow 120ms ease;
 }
 
 /* Refresh Animation Keyframes: Stardust Cascade & Left Stub Slide */
@@ -477,14 +991,25 @@ h1, h2, h3, .font-serif-jp {
 }
 
 .shimmer-paper-loading {
-  background: linear-gradient(
+  /* A solid base first: the old gradient read `--border-color` in the middle,
+     which is a translucent ink, so the dark container behind it showed through
+     as a black band on the light theme. Three opaque stops cannot leak. */
+  background-color: var(--shimmer-base);
+  background-image: linear-gradient(
     90deg,
-    var(--surface-color) 0%,
-    var(--border-color) 50%,
-    var(--surface-color) 100%
+    var(--shimmer-base) 0%,
+    var(--shimmer-sheen) 50%,
+    var(--shimmer-base) 100%
   );
   background-size: 200% 100%;
   animation: shimmer-paper 1.6s infinite linear;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .shimmer-paper-loading {
+    animation: none;
+    background-image: none;
+  }
 }
 
 /* Surprise Me Card Bottom Details Hover / Expand Transition */
@@ -503,7 +1028,10 @@ h1, h2, h3, .font-serif-jp {
 .card-details-peek.is-expanded {
   grid-template-rows: 1fr;
   opacity: 1;
-  margin-top: 0.625rem;
+  /* The open peek's top margin sets how far the plate (title / genre / year)
+     is pushed up. EXPANDED_DROP in SURPRISE_CARD_LAYOUT lowers that block by
+     shrinking the margin, so the open card's text sits where it was tuned. */
+  margin-top: calc(0.625rem - var(--surprise-expanded-drop, 0px));
   pointer-events: auto;
 }
 
@@ -526,4 +1054,3 @@ h1, h2, h3, .font-serif-jp {
     opacity: 1;
   }
 }
-
