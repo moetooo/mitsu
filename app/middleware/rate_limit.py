@@ -32,7 +32,7 @@ class SlidingWindowRateLimiter:
             self.redis_client.ping()
             logger.info("Rate limiter successfully connected to Redis.")
         except Exception as e:
-            logger.warning(f"Redis unavailable for rate limiter ({e}). Using in-memory sliding window fallback.")
+            logger.warning("Redis unavailable for rate limiter (%s). Using in-memory sliding window fallback.", e)
             self.redis_client = None
 
     async def is_rate_limited(self, client_ip: str, route: str) -> tuple[bool, int, int]:
@@ -62,7 +62,7 @@ class SlidingWindowRateLimiter:
                 is_limited = request_count > self.requests_per_minute
                 return is_limited, remaining, self.window_seconds
             except Exception as err:
-                logger.warning(f"Redis rate limit error ({err}), falling back to in-memory store.")
+                logger.warning("Redis rate limit error (%s), falling back to in-memory store.", err)
                 self.redis_client = None
 
         # Fallback: In-memory sliding window calculation
