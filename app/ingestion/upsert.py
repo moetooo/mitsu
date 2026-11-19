@@ -15,6 +15,7 @@ from ..core.identity import (
 )
 from ..db_models import Manga
 from ..enrichment.models import merge_inferred_tags
+from ..services.covers import apply_cover_fields, cover_rank
 from ..services.format import format_type_for_row, infer_format_type
 
 _EMBEDDING_FIELDS = (
@@ -112,6 +113,12 @@ async def smart_upsert_manga_ex(
         )
 
     new_manga = Manga(**record)
+    # Every cover column comes from the seam (`covers.cover_fields`), so a new row
+    # can never carry a URL on a blocked host or a status that disagrees with its
+    # URL - the two bugs ingestion used to be able to create independently.
+    record_candidates = record.get("cover_candidates")
+    record_url = record.get("cover_image_url")
+    apply_cover_fields(new_manga, record_url, record_candidates)
     session.add(new_manga)
     await session.flush()
     conflicts.extend(await attach_external_ids(session, new_manga.id, ids))
@@ -130,6 +137,11 @@ async def smart_upsert_manga(session: AsyncSession, record: dict[str, Any]) -> M
 
 
 def _merge_into(existing: Manga, record: dict[str, Any]) -> None:
+    # Captured before the merge so cover health is only recomputed when the URL
+    # actually changed: re-deriving it unconditionally would erase a `dead`
+    # verdict from the verifier every time an unrelated sync ran.
+    previous_cover = existing.cover_image_url
+
     incoming_alts = record.get("alternative_titles") or []
     existing_alts = existing.alternative_titles or []
     seen_alts_lower = {a.lower().strip() for a in existing_alts if a}
@@ -204,7 +216,13 @@ def _merge_into(existing: Manga, record: dict[str, Any]) -> None:
         if key in {"title_romaji", "title_english", "title_native"}:
             if not getattr(existing, key, None) and value:
                 setattr(existing, key, value)
-        elif key in {"synopsis", "cover_image_url", "banner_image", "site_url"} and not value:
+        elif key == "cover_image_url":
+            # Preference, not "first non-empty wins". Previously a MangaDex cover
+            # overwrote an AniList one simply by arriving later, which is how a
+            # healthy cover became a dead one (cover_unavailable_resolve.md).
+            if cover_rank(value) > cover_rank(existing.cover_image_url):
+                existing.cover_image_url = value
+        elif key in {"synopsis", "banner_image", "site_url"} and not value:
             continue
         elif key in {"anilist_id", "mal_id", "mangadex_id"}:
             current = getattr(existing, key, None)
@@ -214,6 +232,11 @@ def _merge_into(existing: Manga, record: dict[str, Any]) -> None:
                 setattr(existing, key, value)
         elif value is not None or getattr(existing, key, None) is None:
             setattr(existing, key, value)
+
+    if existing.cover_image_url != previous_cover:
+        # Re-derive the whole cover block, not just the status: the merge may have
+        # gained or lost a fallback without changing which URL is primary.
+        apply_cover_fields(existing, existing.cover_image_url, existing.cover_candidates)
 
 
 def _as_utc(value: datetime) -> datetime:

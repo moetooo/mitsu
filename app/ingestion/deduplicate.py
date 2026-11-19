@@ -3,6 +3,7 @@ import logging
 from sqlalchemy import select, func, or_
 from ..db import AsyncSessionLocal
 from ..db_models import Manga
+from ..services.covers import apply_cover_fields
 
 logger = logging.getLogger("mitsu.ingestion.deduplicate")
 
@@ -39,7 +40,13 @@ async def run_deduplication():
                 master.mal_id = master.mal_id or m.mal_id
                 master.mangadex_id = master.mangadex_id or m.mangadex_id
                 master.synopsis = master.synopsis or m.synopsis
-                master.cover_image_url = master.cover_image_url or m.cover_image_url
+                # Through the seam: a duplicate's cover may be on a blocked host, and
+                # copying it straight across is how a dead URL spreads.
+                apply_cover_fields(
+                    master,
+                    master.cover_image_url or m.cover_image_url,
+                    master.cover_candidates or m.cover_candidates,
+                )
                 
                 await session.delete(m)
                 merged_count += 1

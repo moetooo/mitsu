@@ -106,14 +106,16 @@ def mangadex_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
             else:
                 tags.append({"name": name_en, "rank": 100})
                 
-    cover_file = None
-    for rel in raw.get("relationships", []):
-        if rel.get("type") == "cover_art":
-            cover_file = rel.get("attributes", {}).get("fileName")
-            break
-    
+    # No cover URL on purpose. `uploads.mangadex.org` answers browser image
+    # requests with a JS challenge, which an <img> cannot complete, so a MangaDex
+    # cover is not a cover - it renders `CoverFallback` for every row it touches.
+    # Writing nothing lets the merge keep an AniList/Kitsu cover if one is already
+    # stored, and lets the row fall to a generated tile if not. See
+    # `app/services/covers.py` and `cover_unavailable_resolve.md`.
+    #
+    # Returning the URL anyway "for completeness" is exactly how 10,621 dead
+    # covers got written; do not restore it without also fixing the render path.
     md_id = raw.get("id")
-    cover_url = f"https://uploads.mangadex.org/covers/{md_id}/{cover_file}" if cover_file else None
 
     return {
         "mangadex_id": md_id,
@@ -130,7 +132,7 @@ def mangadex_to_record(raw: Dict[str, Any]) -> Dict[str, Any]:
         "volumes": None,
         "average_score": None,
         "popularity": None,
-        "cover_image_url": cover_url,
+        "cover_image_url": None,
         "site_url": f"https://mangadex.org/title/{md_id}",
         "source_updated_at": _from_iso(attr.get("updatedAt")),
         "sync_source": "mangadex",

@@ -68,3 +68,10 @@ async def fetch_with_retry(
             logger.warning("[RateLimiter] Exception (%s). Retrying attempt %d/%d in %.2fs...", e, attempt + 1, max_retries, delay)
             await asyncio.sleep(delay)
     raise RuntimeError(f"Exceeded retries for {fetch_fn.__name__}")
+
+# Tenrai publishes 120 requests/minute for anonymous callers (4 rps) and does not
+# return rate-limit headers, so the budget is enforced here instead: 1.5 rps keeps
+# a repair run under ~90 rpm with room for a burst, and a single batch of 50 ids
+# covers 50 titles, so a full 4,107-title repair needs ~83 requests, well under a
+# minute's allowance.
+tenrai_bucket = TokenBucket(rate_per_sec=1.5, burst=3)
