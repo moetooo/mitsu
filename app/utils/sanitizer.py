@@ -44,9 +44,19 @@ def sanitize_search_query(query: Optional[str], max_length: int = 300) -> str:
 
 
 def sanitize_string_list(items: Optional[List[str]]) -> Optional[List[str]]:
-    """
-    Sanitizes string lists (genres, statuses) to allow only safe alphanumeric, 
-    space, and hyphen characters, preventing SQL array injection.
+    r"""Normalises a list of filter values: control characters out, length capped.
+
+    It used to run `re.sub(r"[^\w\s\-\+\#]", "", item)`, which deleted the
+    apostrophe out of every tag name. That turned the catalogue's `Boys' Love`
+    and `Girls' Love` into `Boys Love` / `Girls Love` **before** the SQL builder
+    saw them, so the tag aliases no longer matched, the generic branch looked for
+    a tag that does not exist, and excluding Boys' Love filtered nothing at all
+    (including it silently returned zero rows).
+
+    Nothing is spliced into SQL -- every genre/status/format value is a bound
+    parameter (`services/query_filters.py`, `services/format.py`) -- so this is
+    the same correction as `sanitize_search_query` (API-18): keep the real text,
+    drop only what a database cannot store.
     """
     if not items:
         return None
@@ -55,8 +65,7 @@ def sanitize_string_list(items: Optional[List[str]]) -> Optional[List[str]]:
     for item in items:
         if not isinstance(item, str):
             continue
-        # Remove non-alphanumeric/space/hyphen characters and single quotes
-        clean_item = re.sub(r"[^\w\s\-\+\#]", "", item).strip()
+        clean_item = CONTROL_CHARS_RE.sub('', item).strip()
         if clean_item:
             sanitized.append(clean_item[:50])
 

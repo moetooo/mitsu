@@ -18,6 +18,7 @@ from typing import Dict, List
 from pydantic import BaseModel
 
 from ..enrichment.vocabulary import TagCategory, list_all_tags
+from ..services.cache import BROWSER_CACHE_SECONDS
 
 router = APIRouter()
 
@@ -42,6 +43,28 @@ CATEGORY_LABELS: Dict[TagCategory, str] = {
 # A format the catalogue never holds is served with filterable=False so the client
 # does not offer a pill that can only ever return an empty shelf.
 CATALOGUE_FORMATS = ("manga", "manhwa", "manhua")
+
+# Taxonomy entries with no counterpart in the catalogue yet.
+#
+# The taxonomy is curated ahead of the data: `Superpowers` has 1,344 rows under
+# the catalogue's `Super Power`, but nothing is stored as `Enemies to Lovers`.
+# Sweeping every option against the catalogue found these ten matching zero rows,
+# so a pill for one is a guaranteed empty page and excluding it excludes nothing.
+# They are served with filterable=False (the client already drops those, exactly
+# as it does an unsupported format) until enrichment writes the tag; when it
+# does, delete the name here and a test insists the row count is no longer zero.
+UNBACKED_TAG_NAMES = frozenset({
+    "Enemies to Lovers",
+    "Friends to Lovers",
+    "Slow Burn",
+    "Childhood Friends",
+    "Regression",
+    "Underdog",
+    "Overpowered Protagonist",
+    "Second Chance",
+    "System / Level Up",
+    "Secret Identity",
+})
 
 
 class VocabularyOption(BaseModel):
@@ -68,12 +91,16 @@ class VocabularyResponse(BaseModel):
 
 
 def _option(tag) -> VocabularyOption:
+    if tag.category == TagCategory.FORMAT:
+        filterable = tag.slug in CATALOGUE_FORMATS
+    else:
+        filterable = tag.name not in UNBACKED_TAG_NAMES
     return VocabularyOption(
         slug=tag.slug,
         value=tag.name,
         label=tag.name,
         description=tag.description,
-        filterable=tag.slug in CATALOGUE_FORMATS if tag.category == TagCategory.FORMAT else True,
+        filterable=filterable,
     )
 
 
@@ -92,6 +119,13 @@ def build_vocabulary() -> VocabularyResponse:
 
 @router.get("/vocabulary", response_model=VocabularyResponse)
 async def get_vocabulary(response: Response) -> VocabularyResponse:
-    """The genre/theme/format vocabulary the filters and pills are built from."""
-    response.headers["Cache-Control"] = "public, max-age=3600, stale-while-revalidate=300"
+    """The genre/theme/format vocabulary the filters and pills are built from.
+
+    The body is derived from the code's tag list, not from the database, so it
+    changes on a deploy rather than on a sync. It still shares one cache policy
+    with every other catalogue read: a browser copy cannot be revoked, and the
+    one policy is easier to reason about than a second exception. Clients that
+    need to notice a change have `version` in the body.
+    """
+    response.headers["Cache-Control"] = f"public, max-age={BROWSER_CACHE_SECONDS}"
     return build_vocabulary()

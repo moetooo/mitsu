@@ -4,6 +4,7 @@ from httpx import AsyncClient, ASGITransport
 from app.main import app
 from app.enrichment.vocabulary import TagCategory, list_all_tags
 from app.routers.vocabulary import build_vocabulary, VOCABULARY_VERSION
+from app.services.cache import BROWSER_CACHE_SECONDS
 
 
 @pytest.fixture
@@ -76,7 +77,11 @@ async def test_vocabulary_endpoint_is_served_and_cacheable(client):
     assert data["version"] == VOCABULARY_VERSION
     assert data["categories"]
     assert data["formats"]
-    assert "max-age" in resp.headers.get("cache-control", "")
+    # One cache policy for every catalogue read: the shared copy is the server's,
+    # the browser gets `BROWSER_CACHE_SECONDS` and no stale window.
+    header = resp.headers["cache-control"]
+    assert int(header.split("max-age=")[1].split(",")[0]) == BROWSER_CACHE_SECONDS, header
+    assert "stale-while-revalidate" not in header, header
 
 
 @pytest.mark.asyncio
