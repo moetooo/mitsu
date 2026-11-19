@@ -28,6 +28,7 @@ from sqlalchemy.orm import defer
 from ..db_models import Manga
 from .cache import get_cached, set_cached
 from .safety import safety_filter
+from .covers import public_cover
 
 logger = logging.getLogger("mitsu.services.featured")
 
@@ -163,12 +164,14 @@ def select_items(
 
 
 def payload_for(manga: Manga, badge: str) -> Dict[str, Any]:
+    cover_url, cover_list = public_cover(manga.cover_image_url, manga.cover_candidates)
     return {
         "id": manga.id,
         "anilist_id": manga.anilist_id,
         "mal_id": manga.mal_id,
         "title": manga.title_english or manga.title_romaji or manga.title_native or "Unknown",
-        "cover_image_url": manga.cover_image_url,
+        "cover_image_url": cover_url,
+        "cover_candidates": cover_list,
         "banner_image": manga.banner_image,
         "synopsis": manga.synopsis,
         "genres": manga.genres,
@@ -177,6 +180,7 @@ def payload_for(manga: Manga, badge: str) -> Dict[str, Any]:
         "start_year": manga.start_year,
         "chapters": manga.chapters,
         "volumes": manga.volumes,
+        "format_type": manga.format_type,
         "average_score": manga.average_score,
         # A curated row answers no query, so it has no similarity to report.
         # This used to be a hardcoded 0.95, rendered as a fabricated "95% match".

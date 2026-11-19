@@ -7,6 +7,23 @@ from typing import Optional, Any, List, Set
 
 logger = logging.getLogger("mitsu.cache")
 
+#: How long a browser may reuse a catalogue response without asking again.
+#:
+#: This is a *transport* hint, not a second cache. The shared copy of a page
+#: lives in Redis, and `invalidate_catalog_caches()` empties those namespaces on
+#: every catalogue write, so an operator can always reach the truth. A browser
+#: copy cannot be recalled, which is why the long `max-age` values this replaces
+#: (900 s on trending/featured, 3600 s on detail/similar, 300 s on search) were a
+#: liability and not a cache: they kept a stale row on screen for up to an hour
+#: after a sync that had already updated it.
+#:
+#: A minute is the whole policy. The catalogue changes only when an operator
+#: inserts titles by hand, so a one-minute window costs nothing measurable while
+#: a five-second one only bought re-fetch chatter on back/forward. It also keeps
+#: a shield over `/manga/{id}/similar`, whose cold path is a live similarity
+#: calculation measured at ~3.5 s.
+BROWSER_CACHE_SECONDS = 60
+
 redis_client = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 def generate_cache_key(prefix: str, data: Any) -> str:

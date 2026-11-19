@@ -44,14 +44,19 @@ from .cache import get_cached, set_cached
 from .format import build_format_sql_condition
 from .query_filters import build_genre_sql_condition
 from .safety import safety_filter
+from .covers import public_cover
 
 logger = logging.getLogger("mitsu.services.trending")
 
 #: Trending moves on the order of days, not minutes, and the query is cheap.
 CACHE_TTL_SECONDS = 900
 
-#: `top10_only` is the dashboard's "top 10" widget.
-TOP10_LIMIT = 10
+#: The page is 12 cards, and 48 is the largest slice this endpoint will build and
+#: cache. Unbounded, `?limit=5000` built a 5000-row page and stored it in Redis
+#: under its own key (the cache key includes the limit), and `?page=99999` paid
+#: for a deep OFFSET. The bound is enforced by the handler (`Query(ge=, le=)`), so
+#: an out-of-range request is a 422 instead of work.
+MAX_PAGE_LIMIT = 48
 
 
 def _normalise(fmt: Optional[str], genre: Optional[str]) -> tuple[str, Optional[str]]:
@@ -68,12 +73,13 @@ def cache_key(fmt: Optional[str], genre: Optional[str], page: int, limit: int) -
     return f"manga:trending:{clean_fmt}:{clean_genre or 'all'}:{page}:{limit}"
 
 
-def build_query(fmt: Optional[str], genre: Optional[str]) -> tuple[Any, Dict[str, Any], bool]:
+def build_query(fmt: Optional[str], genre: Optional[str]) -> tuple[Any, Dict[str, Any]]:
     """The catalogue ranking, as a statement plus its bind parameters.
 
-    Returns ``(stmt, params, used_filters)``. `used_filters` is False when the
-    request asked for filters this catalogue cannot express, so the caller can
-    tell "nothing matches" apart from "nothing to match on".
+    Returns ``(stmt, params)``. A format this catalogue cannot express simply
+    contributes no predicate (see `format.build_format_sql_condition`). The
+    `used_filters` flag that reported that case used to be the third return
+    value here; no caller read it, so it is gone rather than kept.
     """
     clean_fmt, clean_genre = _normalise(fmt, genre)
 
@@ -91,14 +97,11 @@ def build_query(fmt: Optional[str], genre: Optional[str]) -> tuple[Any, Dict[str
         # where it can reorder rows instead of deleting them.
     ]
     params: Dict[str, Any] = {}
-    used_filters = True
 
     if clean_fmt != "all":
         fmt_cond = build_format_sql_condition([clean_fmt])
         if fmt_cond:
             where_clauses.append(sa_text(fmt_cond))
-        else:
-            used_filters = False
 
     if clean_genre:
         genre_cond = build_genre_sql_condition([clean_genre], params)
@@ -115,7 +118,7 @@ def build_query(fmt: Optional[str], genre: Optional[str]) -> tuple[Any, Dict[str
             Manga.popularity.desc().nullslast(),
         )
     )
-    return stmt, params, used_filters
+    return stmt, params
 
 
 async def trending_page(
@@ -127,7 +130,7 @@ async def trending_page(
     genre: Optional[str] = None,
 ) -> List[Manga]:
     """One page of the catalogue ranking. No cache, no network."""
-    stmt, params, _used = build_query(fmt, genre)
+    stmt, params = build_query(fmt, genre)
     offset = max(0, (page - 1) * limit)
     stmt = stmt.offset(offset).limit(limit)
     result = await session.execute(stmt, params) if params else await session.execute(stmt)
@@ -141,12 +144,8 @@ async def get_trending(
     limit: int = 12,
     fmt: Optional[str] = None,
     genre: Optional[str] = None,
-    top10_only: bool = False,
 ) -> List[Dict[str, Any]]:
     """Cached trending page, as plain dicts ready for `RecommendationResult`."""
-    if top10_only:
-        limit, page = TOP10_LIMIT, 1
-
     key = cache_key(fmt, genre, page, limit)
     cached = await get_cached(key)
     if cached is not None:
@@ -159,26 +158,50 @@ async def get_trending(
     return payload
 
 
+def _tag_names(tags: Any) -> List[str]:
+    """Tag *names* only.
+
+    The stored tag objects are `{"name": ..., "rank": ...}`; `rank` is read by
+    no surface (the card's safety scan and the modal's chip list both read
+    `name`). Measured on the twelve top rows: the objects cost 16.5 KB of a
+    30.7 KB page, the names alone 6.3 KB.
+    """
+    names: List[str] = []
+    for tag in tags or []:
+        name = tag.get("name") if isinstance(tag, dict) else tag
+        if name:
+            names.append(name)
+    return names
+
+
 def _row_payload(m: Manga) -> Dict[str, Any]:
-    """The subset of a row the endpoint returns, resolved to its local PK."""
+    """The subset of a row the endpoint returns, resolved to its local PK.
+
+    `mal_id`, `volumes`, `similarity_score` and `llm_reasoning` are absent on
+    purpose. Nothing rendered them: the detail modal renders the trending row
+    it was handed rather than refetching, and the last two were hardcoded `None`
+    here because a catalogue ranking has no query vector and no LLM reasoning
+    (API-12 removed the fake "95% match"). The handler serialises with
+    `response_model_exclude_unset=True`, so an absent key stays absent on the
+    wire instead of coming back as a null.
+    """
+    cover_url, cover_list = public_cover(m.cover_image_url, m.cover_candidates)
     return {
         "id": m.id,
         "anilist_id": m.anilist_id,
-        "mal_id": m.mal_id,
         "title": m.title_english or m.title_romaji or m.title_native or "Unknown Title",
-        "cover_image_url": m.cover_image_url,
+        "cover_image_url": cover_url,
+        "cover_candidates": cover_list,
         "banner_image": m.banner_image,
         "synopsis": m.synopsis,
         "genres": m.genres,
-        "tags": m.tags,
+        "tags": _tag_names(m.tags),
         "status": m.status,
         "start_year": m.start_year,
         "chapters": m.chapters,
-        "volumes": m.volumes,
         "average_score": m.average_score,
-        # A catalogue ranking has no query vector, so there is no similarity to
-        # report. This was a hardcoded 0.95 displayed as "95% match" (API-12).
-        "similarity_score": None,
-        "llm_reasoning": None,
+        # The detail modal names the record by its format ("Manhwa Details"), so a
+        # trending row that dropped this field made every manhwa open as a manga.
+        "format_type": m.format_type,
         "is_nsfw": m.is_nsfw,
     }

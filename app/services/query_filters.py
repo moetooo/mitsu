@@ -52,6 +52,40 @@ def _array_contains_condition(value: str, key: str, params: Dict[str, Any]) -> s
     return "genres @> CAST(:" + key + " AS text[])"
 
 
+# Canonical vocabulary name -> the names the catalogue actually stores.
+#
+# `app/enrichment/vocabulary.py` is a curated taxonomy; the catalogue is filled
+# from AniList/MAL tags. They agree on most entries but not all, and a filter
+# whose name the catalogue never stores can only ever return an empty shelf --
+# and excluding it excludes nothing. A sweep of all 72 options against 95k rows
+# found nine that had no rows under their canonical name; these are the ones with
+# a defensible equivalent. Options with no equivalent at all are marked
+# `filterable: false` by the vocabulary endpoint (see `_UNBACKED_TAG_NAMES`).
+#
+# Keys are `_genre_alias_key()` output.
+TAG_SYNONYMS: Dict[str, tuple] = {
+    "superpowers": ("Superpowers", "Super Power"),
+    "college / university": ("College / University", "College", "University"),
+    "workplace": ("Workplace", "Office", "Office Workers", "Office Lady", "Work"),
+    "feudal japan": ("Feudal Japan", "Samurai"),
+    "fantasy world": ("Fantasy World", "Fantasy"),
+    "dungeon / gate": ("Dungeon / Gate", "Dungeon"),
+    "reborn as a villainess": ("Reborn as a Villainess", "Villainess"),
+    "contract marriage": ("Contract Marriage", "Arranged Marriage"),
+}
+
+
+def _genre_alias_key(value: str) -> str:
+    """Canonical form for alias lookups: no apostrophes, hyphens as spaces.
+
+    `Boys' Love`, `Boys Love` and `boys-love` all collapse to `boys love`, so a
+    caller does not have to spell a tag the way the vocabulary does.
+    """
+    cleaned = value.lower().replace("’", "").replace("'", "")
+    cleaned = cleaned.replace("-", " ")
+    return " ".join(cleaned.split())
+
+
 def build_genre_sql_condition(
     genres_list: Optional[List[str]],
     params: Dict[str, Any],
@@ -79,30 +113,33 @@ def build_genre_sql_condition(
     for idx, genre in enumerate(genres_list):
         if not isinstance(genre, str) or not genre.strip():
             continue
-        low = genre.lower().strip()
+        low = _genre_alias_key(genre)
         # Include and exclude lists need distinct bind names, otherwise the
         # exclusion overwrites the inclusion and the two conditions cancel out.
         key = key_prefix + "_" + str(idx)
 
-        if low in ("yaoi", "bl", "boys' love"):
+        # Keys are apostrophe- and hyphen-insensitive: the vocabulary serves
+        # `Boys' Love`, an apostrophe-free client sends `Boys Love`, and both
+        # have to land on the same tag aliases.
+        if low in ("yaoi", "bl", "boys love"):
             conditions.append("(" + " OR ".join([
                 _array_contains_condition("Boys' Love", key + "_arr", params),
                 _tag_json_condition("Boys' Love", key + "_t1", params),
                 _tag_json_condition("Yaoi", key + "_t2", params),
             ]) + ")")
-        elif low in ("yuri", "gl", "girls' love"):
+        elif low in ("yuri", "gl", "girls love"):
             conditions.append("(" + " OR ".join([
                 _array_contains_condition("Girls' Love", key + "_arr", params),
                 _tag_json_condition("Girls' Love", key + "_t1", params),
                 _tag_json_condition("Yuri", key + "_t2", params),
             ]) + ")")
-        elif low in ("shoujo ai", "shoujo-ai"):
+        elif low == "shoujo ai":
             conditions.append("(" + " OR ".join([
                 _tag_json_condition("Shoujo Ai", key + "_t1", params),
                 _tag_json_condition("Girls' Love", key + "_t2", params),
                 _tag_json_condition("Yuri", key + "_t3", params),
             ]) + ")")
-        elif low in ("shounen ai", "shounen-ai"):
+        elif low == "shounen ai":
             conditions.append("(" + " OR ".join([
                 _tag_json_condition("Shounen Ai", key + "_t1", params),
                 _tag_json_condition("Boys' Love", key + "_t2", params),
@@ -110,6 +147,13 @@ def build_genre_sql_condition(
             ]) + ")")
         elif low in ("shounen", "shoujo", "seinen", "josei", "harem", "reverse harem", "love triangle"):
             conditions.append(_tag_json_condition(genre, key + "_tag", params))
+        elif low in TAG_SYNONYMS:
+            names = TAG_SYNONYMS[low]
+            parts = []
+            for n_idx, name in enumerate(names):
+                parts.append(_array_contains_condition(name, f"{key}_s{n_idx}_arr", params))
+                parts.append(_tag_json_condition(name, f"{key}_s{n_idx}_tag", params))
+            conditions.append("(" + " OR ".join(parts) + ")")
         else:
             conditions.append("(" + " OR ".join([
                 _array_contains_condition(genre, key + "_arr", params),
@@ -149,15 +193,23 @@ def apply_filter_criteria(
         params["max_year"] = filters.max_year
         where_clauses.append("start_year <= :max_year")
 
-    if filters.min_score is not None:
+    # A floor of 0 means "no floor", not "score at least zero". `average_score` is
+    # nullable, and `NULL >= 0` is NULL, so binding 0 silently dropped every
+    # unscored title -- measured at 8 of 20 rows on a live query. The client sends
+    # 0 for an untouched slider, so this is the default state, not an edge case.
+    if filters.min_score is not None and filters.min_score > 0:
         params["min_score"] = filters.min_score
         where_clauses.append("average_score >= :min_score")
 
-    if filters.min_chapters is not None:
+    # Same rule as `min_score`: 0 is the untouched slider, not a bound. The
+    # drawer sends 0 for "no minimum" and "no maximum"; binding it turned the
+    # pair into `chapters BETWEEN 0 AND 0`, which matched almost nothing. An
+    # old bookmark with `?min_chapters=0` is corrected here too.
+    if filters.min_chapters is not None and filters.min_chapters > 0:
         params["min_chapters"] = filters.min_chapters
         where_clauses.append("chapters >= :min_chapters")
 
-    if filters.max_chapters is not None:
+    if filters.max_chapters is not None and filters.max_chapters > 0:
         params["max_chapters"] = filters.max_chapters
         where_clauses.append("chapters <= :max_chapters")
 

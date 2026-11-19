@@ -7,7 +7,7 @@ from ..models import MangaDetail
 from ..services import catalog
 from ..utils.sanitizer import sanitize_search_query
 from ..services.search_autocorrect import autocorrect_query
-from ..services.cache import get_cached, set_cached
+from ..services.cache import BROWSER_CACHE_SECONDS, get_cached, set_cached
 
 router = APIRouter()
 
@@ -31,7 +31,9 @@ async def search_manga(
     if not clean_q:
         return []
 
-    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=60"
+    # Redis owns the shared copy (300 s, wiped by every catalogue write); the
+    # browser gets a minute, because its copy cannot be revoked.
+    response.headers["Cache-Control"] = f"public, max-age={BROWSER_CACHE_SECONDS}"
 
     # The page is part of the identity of the answer: without it, page 2 would be
     # served page 1's rows from the cache.

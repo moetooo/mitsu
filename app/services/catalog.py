@@ -31,8 +31,9 @@ from sqlalchemy.orm import defer
 
 from ..db_models import Manga, SEARCH_BLOB
 from ..models import RecommendFilters
-from .retrieval import retrieve_similar_manga, similar_edges_are_fresh
+from .retrieval import SEED_MIN_SIMILARITY, retrieve_similar_manga, similar_edges_are_fresh
 from .safety import row_is_nsfw, safety_filter
+from .covers import public_cover
 
 #: `/search` is a jump-to-title box. Stage 7 added `limit`/`offset` (API-08);
 #: the router bounds `limit` to `SEARCH_MAX_LIMIT` so the ceiling is one number.
@@ -120,6 +121,7 @@ async def get_title_card(session: AsyncSession, manga_id: int) -> Optional[Dict[
             Manga.title_english,
             Manga.title_romaji,
             Manga.cover_image_url,
+            Manga.cover_candidates,
             Manga.format_type,
             Manga.start_year,
         ).where(Manga.id == manga_id)
@@ -127,10 +129,12 @@ async def get_title_card(session: AsyncSession, manga_id: int) -> Optional[Dict[
     row = result.first()
     if row is None:
         return None
+    cover_url, cover_list = public_cover(row.cover_image_url, row.cover_candidates)
     return {
         "id": row.id,
         "title": row.title_english or row.title_romaji,
-        "cover_image_url": row.cover_image_url,
+        "cover_image_url": cover_url,
+        "cover_candidates": cover_list,
         "format_type": row.format_type,
         "start_year": row.start_year,
     }
@@ -193,6 +197,7 @@ async def similar_candidates(
     manga_id: int,
     *,
     limit: int,
+    offset: int = 0,
     allow_nsfw: bool = False,
 ) -> List[Dict[str, Any]]:
     """Neighbours of one title as `{"manga": row, "similarity_score": float}`.
@@ -215,6 +220,8 @@ async def similar_candidates(
 
     use_precomputed_edges = edges_fresh or manga.embedding is None
     candidates: List[Dict[str, Any]] = []
+    # The edge list is a fixed, already-ordered answer; paginate it by slicing.
+    take = max(0, offset) + max(1, limit)
 
     if use_precomputed_edges:
         # Resolve the whole edge list, then filter. Pre-slicing it to `limit + 10`
@@ -229,15 +236,24 @@ async def similar_candidates(
             if not allow_nsfw and row_is_nsfw(neighbour):
                 continue
             candidates.append({"manga": neighbour, "similarity_score": item.get("score", 0.0)})
-            if len(candidates) >= limit:
+            if len(candidates) >= take:
                 break
+        # The edge list has no SQL offset; slice the already-ordered page here.
+        candidates = candidates[max(0, offset):take]
 
     if not candidates and manga.embedding is not None:
         candidates = await retrieve_similar_manga(
             session=session,
             query_embedding=manga.embedding,
             filters=RecommendFilters(nsfw=allow_nsfw),
-            limit=limit + 1,
+            limit=max(1, limit),
+            offset=max(0, offset),
+            # Exclude the seed in SQL so an offset counts candidates, not the
+            # seed it would have to drop afterwards (which shortened page 2+).
+            exclude_id=manga_id,
+            # Same neighbourhood floor as the title-seeded search: a live
+            # neighbour list must not contain a row the seed is not near.
+            min_similarity=SEED_MIN_SIMILARITY,
         )
 
     return [c for c in candidates if c["manga"].id != manga_id][:limit]

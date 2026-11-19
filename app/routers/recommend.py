@@ -12,7 +12,11 @@ from ..models import (
 from ..services import catalog
 from ..db import get_db
 from ..services.embedding import generate_embedding
-from ..services.retrieval import retrieve_similar_manga
+from ..services.retrieval import (
+    SEED_MIN_SIMILARITY,
+    retrieve_catalog_page,
+    retrieve_similar_manga,
+)
 from ..services.roulette import retrieve_roulette_manga
 from ..services.title_match import find_exact_title, find_title_suggestion
 from ..services.llm import generate_reasoning
@@ -61,6 +65,7 @@ async def roulette(request: RouletteRequest, db: AsyncSession = Depends(get_db))
         mal_id=item.get("mal_id"),
         title=item.get("title", "Unknown Title"),
         cover_image_url=item.get("cover_image_url"),
+        cover_candidates=item.get("cover_candidates"),
         banner_image=item.get("banner_image"),
         synopsis=item.get("synopsis"),
         genres=item.get("genres"),
@@ -95,6 +100,7 @@ async def roulette_batch(request: RouletteRequest, db: AsyncSession = Depends(ge
             mal_id=item.get("mal_id"),
             title=item.get("title", "Unknown Title"),
             cover_image_url=item.get("cover_image_url"),
+            cover_candidates=item.get("cover_candidates"),
             banner_image=item.get("banner_image"),
             synopsis=item.get("synopsis"),
             genres=item.get("genres"),
@@ -163,6 +169,7 @@ async def _answer_query(db: AsyncSession, request: RecommendRequest) -> _Answer:
                     id=sug["id"],
                     title=sug["title"] or sug_name,
                     cover_image_url=sug["cover_image_url"],
+                    cover_candidates=sug.get("cover_candidates"),
                     format_type=sug["format_type"],
                     start_year=sug["start_year"],
                     match_score=round(float(sug_score), 4),
@@ -205,7 +212,17 @@ async def _answer_query(db: AsyncSession, request: RecommendRequest) -> _Answer:
                 # The seed title is fetched by id above; excluding it here keeps
                 # the page boundary exact instead of consuming a spare row.
                 exclude_id=mid,
-                query_inferred_tags=getattr(target_manga, "inferred_tags", None) if target_manga else None
+                query_inferred_tags=getattr(target_manga, "inferred_tags", None) if target_manga else None,
+                sort=request.sort,
+                # Word-matching titles are part of an exact-title answer too:
+                # "berserk" also offers "Berserk of Gluttony". The word rule
+                # (`title_boost > 0`) admits rows below the 0.44 floor; the
+                # floor still applies to everything else.
+                query_text=request.query,
+                # Neighbours of a title still have to be neighbours. Without
+                # this floor a sparse pool appended rows from outside the
+                # neighbourhood (Berserk -> "Black Witch Mirror", sim 0.34).
+                min_similarity=SEED_MIN_SIMILARITY,
             )
             for c in similar_candidates:
                 top_candidates.append(c)
@@ -230,7 +247,8 @@ async def _answer_query(db: AsyncSession, request: RecommendRequest) -> _Answer:
             filters=request.filters,
             limit=request.limit + 1,
             offset=offset,
-            query_text=request.query
+            query_text=request.query,
+            sort=request.sort
         )
         has_more = len(top_candidates) > request.limit
         top_candidates = top_candidates[:request.limit]
@@ -278,22 +296,47 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
     request.filters = sanitize_recommend_filters(request.filters)
 
     # 1. Check Cache
-    cache_key = generate_cache_key("recommend", request.model_dump())
+    # Versioned: a ranking change must not keep serving the previous algorithm's
+    # payloads for an hour. Bump the prefix whenever the shape of the answer
+    # changes, not only when the fields do.
+    cache_key = generate_cache_key("recommend:v4", request.model_dump())
     cached_response = await get_cached(cache_key)
     if cached_response:
         return cached_response
 
-    # 2. Answer the query as typed, falling back to a spelling correction only if
-    #    nothing matched (SVC-05). `autocorrect_query` returns its input unchanged
-    #    when it has no confident candidate, so an unknown word is never replaced.
-    answer = await _answer_with_fallback(db, request)
+    # 2. No query is a browse request: the filters are the whole intent, so
+    #    there is nothing to embed, nothing to autocorrect and no title to
+    #    suggest. This branch used to be an empty response, which is what made
+    #    filter-only discovery impossible.
+    if not request.query:
+        t0 = time.time()
+        offset = (request.page - 1) * request.limit
+        top_candidates = await retrieve_catalog_page(
+            db,
+            filters=request.filters,
+            sort=request.sort,
+            limit=request.limit + 1,
+            offset=offset,
+        )
+        has_more = len(top_candidates) > request.limit
+        top_candidates = top_candidates[:request.limit]
+        corrected_query = None
+        title_suggestion = None
+        query_embedding_ms = 0.0
+        retrieval_ms = (time.time() - t0) * 1000
+    else:
+        # 3. Answer the query as typed, falling back to a spelling correction only
+        #    if nothing matched (SVC-05). `autocorrect_query` returns its input
+        #    unchanged when it has no confident candidate, so an unknown word is
+        #    never replaced.
+        answer = await _answer_with_fallback(db, request)
 
-    top_candidates = answer.top_candidates
-    corrected_query = answer.corrected_query
-    title_suggestion = answer.title_suggestion
-    query_embedding_ms = answer.query_embedding_ms
-    retrieval_ms = answer.retrieval_ms
-    has_more = answer.has_more
+        top_candidates = answer.top_candidates
+        corrected_query = answer.corrected_query
+        title_suggestion = answer.title_suggestion
+        query_embedding_ms = answer.query_embedding_ms
+        retrieval_ms = answer.retrieval_ms
+        has_more = answer.has_more
 
     # If no matching candidates (e.g. gibberish or zero-relevance query), skip LLM and return empty
     if not top_candidates:
@@ -310,10 +353,16 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
         await set_cached(cache_key, response.model_dump(), ttl=1800)
         return response
 
-    # 4. LLM Reasoning
-    t0 = time.time()
-    reasoning_map = await generate_reasoning(corrected_query, top_candidates)
-    llm_ms = (time.time() - t0) * 1000
+    # 4. LLM Reasoning. A browse request has no query to reason about, and the
+    #    reasoning text is rendered nowhere, so filter-only discovery stays off
+    #    the paid path.
+    if request.query:
+        t0 = time.time()
+        reasoning_map = await generate_reasoning(corrected_query, top_candidates)
+        llm_ms = (time.time() - t0) * 1000
+    else:
+        reasoning_map = {}
+        llm_ms = 0.0
     
     # 5. Format Response
     results = []
@@ -324,6 +373,7 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
             anilist_id=m.anilist_id,
             title=m.title_english or m.title_romaji or m.title_native or "Unknown Title",
             cover_image_url=m.cover_image_url,
+            cover_candidates=m.cover_candidates,
             synopsis=m.synopsis,
             genres=m.genres,
             tags=m.tags,
@@ -332,6 +382,7 @@ async def recommend(request: RecommendRequest, db: AsyncSession = Depends(get_db
             chapters=m.chapters,
             volumes=m.volumes,
             average_score=m.average_score,
+            popularity=m.popularity,
             similarity_score=c["similarity_score"],
             llm_reasoning=reasoning_map.get(m.id),
             format_type=getattr(m, "format_type", None) or c.get("format_type"),

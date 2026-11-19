@@ -37,6 +37,47 @@ class TestFilterBuilder(unittest.TestCase):
         self.assertIsNone(build_format_sql_condition([]))
         self.assertIsNone(build_format_sql_condition(None))
 
+    # -------------------------------------------------------------
+    # Genre alias resolution (excluded Boys' Love used to filter nothing)
+    # -------------------------------------------------------------
+    def test_genre_alias_accepts_apostrophe_free_boys_love(self):
+        """`Boys Love` has to reach the Boys' Love / Yaoi tag aliases.
+
+        The alias list only held `boys' love`, and the request sanitizer deleted
+        apostrophes before this ran, so `Boys Love` fell through to the generic
+        branch and matched a tag that does not exist. Excluding it therefore
+        excluded nothing, and the NOT(condition) was NOT(false) per row.
+        """
+        for spelling in ("Boys' Love", "Boys Love", "boys love", "boys-love", "BL", "Yaoi"):
+            params = {}
+            cond = build_genre_sql_condition([spelling], params, exclude=True)
+            self.assertTrue(cond.startswith("NOT ("), spelling)
+            bound = json.dumps(params)
+            self.assertIn("Boys' Love", bound)
+            self.assertIn("Yaoi", bound)
+
+    def test_genre_alias_accepts_apostrophe_free_girls_love(self):
+        for spelling in ("Girls' Love", "Girls Love", "GL", "Yuri"):
+            params = {}
+            build_genre_sql_condition([spelling], params)
+            bound = json.dumps(params)
+            self.assertIn("Girls' Love", bound)
+            self.assertIn("Yuri", bound)
+
+    def test_unaliased_genre_keeps_the_value_it_was_given(self):
+        """No alias match means the caller's own text, apostrophes included."""
+        params = {}
+        build_genre_sql_condition(["Family's Bond"], params)
+        self.assertIn("Family's Bond", json.dumps(params))
+
+    def test_genre_alias_binds_apostrophe_verbatim(self):
+        """The apostrophe must survive into the bind parameter, not the SQL text."""
+        params = {}
+        build_genre_sql_condition(["Boys' Love"], params, exclude=True)
+        bound = json.dumps(params)
+        self.assertIn("Boys' Love", bound)
+        self.assertNotIn("Boys Love", bound)
+
     def test_build_format_sql_case_insensitive(self):
         """Format matching must be case-insensitive (e.g. 'MANGA' or 'Manhwa')."""
         cond_upper = build_format_sql_condition(["MANGA"])
@@ -172,3 +213,41 @@ class TestFilterBuilder(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestScoreFloor(unittest.TestCase):
+    """`min_score: 0` must mean "no floor", not "score at least zero".
+
+    `average_score` is nullable and `NULL >= 0` is NULL, so binding 0 dropped every
+    unscored title. Measured on the live catalogue before the fix: 8 of 20 rows
+    vanished from an ordinary search, because the client sends 0 for an untouched
+    slider -- the default state, not an edge case.
+    """
+
+    def _where(self, **kwargs):
+        from app.services.query_filters import apply_filter_criteria
+        from app.models import RecommendFilters
+
+        where = []
+        params = {}
+        apply_filter_criteria(RecommendFilters(**kwargs), where, params)
+        return where, params
+
+    def test_zero_floor_adds_no_predicate(self):
+        where, params = self._where(min_score=0)
+        self.assertEqual(where, [])
+        self.assertNotIn("min_score", params)
+
+    def test_zero_match_floor_adds_no_predicate(self):
+        where, params = self._where(min_match_pct=0)
+        self.assertEqual(where, [])
+        self.assertNotIn("min_pct", params)
+
+    def test_a_real_floor_still_adds_one(self):
+        where, params = self._where(min_score=70, min_match_pct=0.5)
+        self.assertIn("average_score >= :min_score", where)
+        self.assertEqual(params["min_score"], 70)
+
+    def test_absent_floor_is_absent(self):
+        where, _params = self._where()
+        self.assertEqual(where, [])

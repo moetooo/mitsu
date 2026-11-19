@@ -4,6 +4,7 @@ from sqlalchemy import text
 from app.db import AsyncSessionLocal
 from app.models import RecommendFilters
 from app.services.embedding import generate_embedding
+from app.services.query_filters import apply_filter_criteria
 from app.services.retrieval import retrieve_similar_manga
 from app.utils.sanitizer import sanitize_search_query, sanitize_recommend_filters
 from app.services.search_autocorrect import autocorrect_query
@@ -60,6 +61,82 @@ def test_search_autocorrect_alternative_titles_vocabulary():
     # Verify correction of a typo against vocabulary derived from alternative titles
     corrected = _correction_for_token("shingki", vocab)
     assert corrected == "shingeki"
+
+
+def test_zero_chapter_bounds_are_not_a_chapter_range():
+    """0 is "no bound", not "chapters BETWEEN 0 AND 0".
+
+    The drawer's untouched state sends both bounds as 0. Bound literally, that
+    pair matched almost no row, so a normal search returned one title and every
+    sort looked identical.
+    """
+    where_clauses = []
+    params = {}
+    apply_filter_criteria(RecommendFilters(min_chapters=0, max_chapters=0), where_clauses, params)
+
+    assert where_clauses == []
+    assert params == {}
+
+
+def test_real_chapter_bounds_are_still_bound():
+    where_clauses = []
+    params = {}
+    apply_filter_criteria(RecommendFilters(min_chapters=5, max_chapters=100), where_clauses, params)
+
+    assert params == {"min_chapters": 5, "max_chapters": 100}
+    assert any("chapters >= :min_chapters" in clause for clause in where_clauses)
+    assert any("chapters <= :max_chapters" in clause for clause in where_clauses)
+
+
+def test_filter_list_sanitizer_keeps_tag_punctuation():
+    """Tag names must survive normalisation intact.
+
+    `sanitize_string_list` used to strip everything outside alphanumerics,
+    spaces, hyphens, plus and hash, which deleted the apostrophe from `Boys' Love` / `Girls' Love`. The SQL
+    builder then no longer recognised the tag alias, so `exclude_genres:
+    ["Boys' Love"]` excluded nothing at all -- the reported bug. Values are
+    bound parameters, so the text can stay as the catalogue spells it.
+    """
+    filters = RecommendFilters(
+        genres=["Boys' Love"],
+        exclude_genres=["Girls' Love", "Sci-Fi"],
+        status=["FINISHED"],
+    )
+    cleaned = sanitize_recommend_filters(filters)
+    assert cleaned.genres == ["Boys' Love"]
+    assert cleaned.exclude_genres == ["Girls' Love", "Sci-Fi"]
+    assert cleaned.status == ["FINISHED"]
+
+
+def test_filter_list_sanitizer_still_drops_control_characters_and_caps_length():
+    filters = RecommendFilters(exclude_genres=["Boys' Love" + chr(0) + chr(7), "x" * 80])
+    cleaned = sanitize_recommend_filters(filters)
+    assert cleaned.exclude_genres[0] == "Boys' Love"
+    assert len(cleaned.exclude_genres[1]) == 50
+
+
+@pytest.mark.asyncio
+@pytest.mark.requires_catalog
+async def test_exclude_boys_love_removes_every_bl_row():
+    """Regression: excluding Boys' Love must remove BL rows from the page.
+
+    Exercises the whole chain the UI uses -- sanitizer, alias resolution, SQL --
+    against the catalogue, and accepts the apostrophe-free spelling a client may
+    send after normalising the vocabulary label.
+    """
+    emb = await generate_embedding("school romance confession")
+    for spelling in ("Boys' Love", "Boys Love"):
+        filters = sanitize_recommend_filters(
+            RecommendFilters(exclude_genres=[spelling])
+        )
+        async with AsyncSessionLocal() as db:
+            results = await retrieve_similar_manga(db, emb, filters=filters, limit=10)
+            assert len(results) > 0
+            for row in results:
+                tag_names = [t.get("name") for t in (row["manga"].tags or [])]
+                title = row["manga"].title_english or row["manga"].title_romaji
+                assert "Boys' Love" not in tag_names, f"{title} is BL but was returned"
+                assert "Yaoi" not in tag_names, f"{title} is Yaoi but was returned"
 
 
 # -------------------------------------------------------------

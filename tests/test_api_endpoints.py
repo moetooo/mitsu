@@ -143,3 +143,20 @@ async def test_api_recommend_manga_only(client):
         genres = [g.lower() for g in (r.get("genres") or [])]
         assert "manhwa" not in genres
         assert "manhua" not in genres
+
+
+def test_detail_payloads_carry_the_real_format():
+    """A manhwa has to open as a manhwa.
+
+    The detail modal names the record by `format_type` ("Manhwa Details"). Both
+    rails used to drop the field, so every title reached the modal as an
+    undefined format and the bar always said "Manga Details".
+    """
+    from app.db_models import Manga
+    from app.services.featured import payload_for
+    from app.services.trending import _row_payload
+
+    row = Manga(title_english="Solo Leveling", format_type="MANHWA", genres=["Action"], tags=[])
+
+    assert _row_payload(row)["format_type"] == "MANHWA"
+    assert payload_for(row, "Trending")["format_type"] == "MANHWA"

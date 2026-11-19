@@ -13,9 +13,11 @@ import ast
 import inspect
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
 from app.db import AsyncSessionLocal
+from app.main import app
 from app.services import trending
 from app.services.cache import set_cached
 
@@ -63,9 +65,8 @@ def test_genre_predicate_comes_from_the_shared_builder():
     `yaoi` must expand to the same alias set the retrieval filter uses, and it
     must be bound rather than pasted into the SQL text.
     """
-    stmt, params, used = trending.build_query("all", "yaoi")
+    stmt, params = trending.build_query("all", "yaoi")
     compiled = str(stmt)
-    assert used is True
     assert "genre_0_arr" in compiled
     assert params["genre_0_arr"] == ["Boys' Love"]
     assert "Yaoi" not in compiled, "the alias must be a bind value, not SQL text"
@@ -80,17 +81,17 @@ def test_trending_does_not_filter_by_year():
     because they started before 2020. If freshness should matter it belongs in the
     ORDER BY as a weight, where it reorders rows instead of deleting them.
     """
-    stmt, _params, _used = trending.build_query("all", None)
+    stmt, _params = trending.build_query("all", None)
     # The column list of a whole-row select mentions `start_year` either way; the
     # predicate is the thing under test.
     predicate = str(stmt.whereclause)
     assert "start_year" not in predicate, predicate
 
 
-def test_unknown_format_reports_that_it_could_not_filter():
+def test_unknown_format_contributes_no_predicate():
     """An unrecognised format must not silently look like a working filter."""
-    _stmt, _params, used = trending.build_query("not-a-real-format", None)
-    assert used is False
+    stmt, _params = trending.build_query("not-a-real-format", None)
+    assert "format_type" not in str(stmt.whereclause)
 
 
 @pytest.mark.asyncio
@@ -131,11 +132,38 @@ async def test_get_trending_serves_the_cache_before_the_database(seeded_catalog)
 
 
 @pytest.mark.asyncio
-async def test_top10_only_overrides_page_and_limit(seeded_catalog):
-    """The dashboard widget always gets ten rows from page one."""
-    key = trending.cache_key("all", None, 1, trending.TOP10_LIMIT)
-    await set_cached(key, [{"id": 2, "title": "Top Ten"}], ttl=60)
+async def test_trending_payload_carries_only_what_is_rendered(seeded_catalog):
+    """The wire shape is the card's and the modal's, nothing else.
 
-    async with AsyncSessionLocal() as session:
-        rows = await trending.get_trending(session, page=7, limit=40, top10_only=True)
-    assert rows == [{"id": 2, "title": "Top Ten"}]
+    `mal_id` and `volumes` were rendered by no surface (the modal renders the
+    trending row it was handed, it does not refetch), and `similarity_score` and
+    `llm_reasoning` were hardcoded `None` (API-12). `tags` ships names instead of
+    `{name, rank}` objects, because only `name` is read. `response_model_
+    exclude_unset=True` is what keeps an omitted field off the wire -- without it
+    the response model put all four back as nulls.
+    """
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        res = await client.get("/manga/trending", params={"page": 1, "limit": 3})
+    assert res.status_code == 200, res.text
+
+    rows = res.json()
+    assert rows, "the seeded catalogue should answer with at least one row"
+    for row in rows:
+        for dropped in ("mal_id", "volumes", "similarity_score", "llm_reasoning"):
+            assert dropped not in row, f"{dropped} is rendered by no surface"
+        assert isinstance(row["title"], str) and row["title"], "a card needs a title"
+        assert all(isinstance(tag, str) for tag in row["tags"]), row["tags"]
+        for kept in (
+            "id",
+            "cover_image_url",
+            "banner_image",
+            "genres",
+            "synopsis",
+            "status",
+            "start_year",
+            "chapters",
+            "average_score",
+            "is_nsfw",
+        ):
+            assert kept in row, f"{kept} is rendered by the card or the modal"

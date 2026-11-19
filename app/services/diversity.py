@@ -18,6 +18,7 @@ import re
 from typing import Any, Dict, List, Optional, Set
 
 from .format import infer_format_type
+from .covers import public_cover
 
 
 # Trailing markers that distinguish a volume/season entry from the series itself.
@@ -146,12 +147,14 @@ def apply_diversity_filtering(rows: List[Any], exclude_ids: Set[int], max_target
         # of 85 -- a community score presented as a match percentage, so an
         # unrated title claimed an 85% "match". `average_score` is already its
         # own field below.
+        cover_url, cover_list = public_cover(r.cover_image_url, getattr(r, "cover_candidates", None))
         out.append({
             "id": r.id,
             "anilist_id": r.anilist_id,
             "mal_id": r.mal_id,
             "title": title,
-            "cover_image_url": r.cover_image_url,
+            "cover_image_url": cover_url,
+            "cover_candidates": cover_list,
             "banner_image": r.banner_image,
             "synopsis": r.synopsis,
             "genres": r.genres,

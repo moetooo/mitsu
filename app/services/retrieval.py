@@ -28,6 +28,16 @@ from ..db_models import Manga
 from ..models import RecommendFilters
 from .format import infer_format_type
 from .query_filters import apply_filter_criteria
+# The ordering grammar and the seed floor live in `retrieval_ordering` so this
+# module stays under the service line ceiling. Re-exported because callers
+# (router, catalog, tests) import them from here.
+from .retrieval_ordering import (
+    SEED_MIN_SIMILARITY,
+    SORT_IDS,
+    browse_order_clause as _browse_order_clause,
+    normalize_sort,
+    text_order_clause as _text_order_clause,
+)
 from .safety import safety_filter
 from .tag_alignment import build_tag_alignment_sql
 
@@ -112,6 +122,79 @@ def similar_edges_are_fresh(manga: Any, max_age_days: Optional[int] = None) -> b
     return (now - written_at) <= timedelta(days=days)
 
 
+# Columns every candidate query returns. Kept at module scope so the
+# embedding-free browse query and the ANN query hydrate through one function.
+CANDIDATE_COLUMNS = """
+            id, anilist_id, mal_id, mangadex_id,
+            title_romaji, title_english, title_native,
+            synopsis, genres, tags, inferred_tags, status, start_year,
+            chapters, volumes, average_score, popularity,
+            cover_image_url, banner_image, site_url, alternative_titles
+    """
+
+def _hydrate_candidates(rows) -> List[Dict[str, Any]]:
+    """Turn result rows into the `{"manga", "similarity_score", ...}` shape.
+
+    Shared by the ANN query and the embedding-free browse query. A browse row
+    has no `hybrid_score`, so the displayed match stays None instead of a
+    fabricated number.
+    """
+    candidates = []
+    for r in rows:
+        m = Manga()
+        m.id = r.id
+        m.anilist_id = r.anilist_id
+        m.mal_id = r.mal_id
+        m.mangadex_id = r.mangadex_id
+        m.title_romaji = r.title_romaji
+        m.title_english = r.title_english
+        m.title_native = r.title_native
+        m.synopsis = r.synopsis
+        m.genres = r.genres
+        m.tags = r.tags
+        m.inferred_tags = r.inferred_tags
+        m.status = r.status
+        m.start_year = r.start_year
+        m.chapters = r.chapters
+        m.volumes = r.volumes
+        m.average_score = r.average_score
+        m.popularity = r.popularity
+        m.cover_image_url = r.cover_image_url
+        m.banner_image = r.banner_image
+        m.site_url = r.site_url
+        m.format_type = getattr(r, "format_type", None) or infer_format_type(
+            r.title_native, r.tags, r.genres, r.site_url, r.inferred_tags
+        )
+
+        # The displayed score is the score the ranking actually used.
+        #
+        # It used to be floored: `max(score, 0.96)` for an exact title and
+        # `max(score, 0.88)` for a prefix, applied after the query ran. That
+        # turned a real 0.42 similarity into a rendered "96%", and it made
+        # three genuinely different matches (Berserk: The Prototype, Berserk:
+        # The Flame Dragon Knight, Berserk of Gluttony) all render as exactly
+        # "88%" -- the floor value, not a measured one.
+        #
+        # The title preference is not lost by removing this: `title_boost`
+        # already enters `hybrid_score` as a 0.30-weighted term in the SQL, so
+        # exact and prefix hits still rank first. Only the dishonest number is
+        # gone.
+        hybrid = getattr(r, "hybrid_score", None)
+
+        cand_dict = {
+            "manga": m,
+            "similarity_score": float(hybrid) if hybrid is not None else None,
+            "title_boost": float(getattr(r, "title_boost", 0.0) or 0.0),
+            "format_type": m.format_type
+        }
+        if hasattr(r, 'tag_alignment'):
+            cand_dict["tag_alignment"] = round(float(r.tag_alignment), 4)
+
+        candidates.append(cand_dict)
+
+    return candidates
+
+
 async def retrieve_similar_manga(
     session: AsyncSession,
     query_embedding: Any,
@@ -124,6 +207,8 @@ async def retrieve_similar_manga(
     category_weights: Optional[Dict[str, float]] = None,
     tag_boost: Optional[float] = None,
     exclude_id: Optional[int] = None,
+    sort: str = "default",
+    min_similarity: Optional[float] = None,
 ):
     if isinstance(query_embedding, str):
         emb_str = query_embedding
@@ -199,7 +284,17 @@ async def retrieve_similar_manga(
 
     relevance_conditions = []
     if clean_q:
-        relevance_conditions.append("(title_boost > 0 OR sim >= 0.44)")
+        # A title-word match is admitted even when `sim` is low -- that is the
+        # whole point of the word rule. An extra absolute floor ANDed here would
+        # cancel it ("Berserk of Gluttony" at 0.327 next to "Berserk").
+        relevance_conditions.append(f"(title_boost > 0 OR sim >= {SEED_MIN_SIMILARITY})")
+    elif min_similarity is not None:
+        # A seed (title) search with no query text has no title rule to lean on,
+        # so the caller passes an absolute floor. Applied to `sim`, not
+        # `hybrid_score`: popularity and score must not buy a row into a
+        # neighbourhood it is not semantically in.
+        params["min_similarity"] = float(min_similarity)
+        relevance_conditions.append("sim >= :min_similarity")
     if filters and filters.min_match_pct and filters.min_match_pct > 0:
         params["min_pct"] = float(filters.min_match_pct)
         relevance_conditions.append("hybrid_score >= :min_pct")
@@ -223,13 +318,7 @@ async def retrieve_similar_manga(
     # has to precede the query on the same session.
     await apply_ann_settings(session)
 
-    pool_columns = """
-            id, anilist_id, mal_id, mangadex_id,
-            title_romaji, title_english, title_native,
-            synopsis, genres, tags, inferred_tags, status, start_year,
-            chapters, volumes, average_score, popularity,
-            cover_image_url, banner_image, site_url, alternative_titles
-    """
+    pool_columns = CANDIDATE_COLUMNS
 
     cte_sql = f"""vector_pool AS (
           SELECT {pool_columns},
@@ -271,14 +360,18 @@ async def retrieve_similar_manga(
             ROW_NUMBER() OVER (
               PARTITION BY LOWER(COALESCE(title_english, title_romaji, id::text))
               ORDER BY sim DESC, popularity DESC NULLS LAST
-            ) as rn
+            ) as rn,
+            ROW_NUMBER() OVER (
+              PARTITION BY COALESCE(anilist_id, mal_id, id)
+              ORDER BY sim DESC, popularity DESC NULLS LAST
+            ) as rn_work
           FROM candidates
         ),
         scored AS (
           SELECT *,
             {score_calc}
           FROM ranked
-          WHERE rn = 1
+          WHERE rn = 1 AND rn_work = 1
         )"""
 
     sql = text(f"""
@@ -286,7 +379,7 @@ async def retrieve_similar_manga(
         SELECT *
         FROM scored
         {where_filter_sql}
-        ORDER BY hybrid_score DESC, id ASC
+        ORDER BY {_text_order_clause(sort)}
         LIMIT :limit OFFSET :offset;
     """)
 
@@ -299,19 +392,23 @@ async def retrieve_similar_manga(
             ROW_NUMBER() OVER (
               PARTITION BY LOWER(COALESCE(title_english, title_romaji, id::text))
               ORDER BY (1 - (embedding <=> CAST(:emb AS vector))) DESC, popularity DESC NULLS LAST
-            ) as rn
+            ) as rn,
+            ROW_NUMBER() OVER (
+              PARTITION BY COALESCE(anilist_id, mal_id, id)
+              ORDER BY (1 - (embedding <=> CAST(:emb AS vector))) DESC, popularity DESC NULLS LAST
+            ) as rn_work
           FROM manga
           WHERE {where_str}
         ),
         scored AS (
           SELECT *, {score_calc}
           FROM ranked
-          WHERE rn = 1
+          WHERE rn = 1 AND rn_work = 1
         )
         SELECT *
         FROM scored
         {where_filter_sql}
-        ORDER BY hybrid_score DESC, id ASC
+        ORDER BY {_text_order_clause(sort)}
         LIMIT :limit OFFSET :offset;
     """)
 
@@ -332,57 +429,48 @@ async def retrieve_similar_manga(
         except Exception:
             pass
 
-    candidates = []
-    for r in rows:
-        m = Manga()
-        m.id = r.id
-        m.anilist_id = r.anilist_id
-        m.mal_id = r.mal_id
-        m.mangadex_id = r.mangadex_id
-        m.title_romaji = r.title_romaji
-        m.title_english = r.title_english
-        m.title_native = r.title_native
-        m.synopsis = r.synopsis
-        m.genres = r.genres
-        m.tags = r.tags
-        m.inferred_tags = r.inferred_tags
-        m.status = r.status
-        m.start_year = r.start_year
-        m.chapters = r.chapters
-        m.volumes = r.volumes
-        m.average_score = r.average_score
-        m.popularity = r.popularity
-        m.cover_image_url = r.cover_image_url
-        m.banner_image = r.banner_image
-        m.site_url = r.site_url
-        m.format_type = getattr(r, "format_type", None) or infer_format_type(
-            r.title_native, r.tags, r.genres, r.site_url, r.inferred_tags
-        )
+    return _hydrate_candidates(rows)
 
-        # The displayed score is the score the ranking actually used.
-        #
-        # It used to be floored: `max(score, 0.96)` for an exact title and
-        # `max(score, 0.88)` for a prefix, applied after the query ran. That
-        # turned a real 0.42 similarity into a rendered "96%", and it made
-        # three genuinely different matches (Berserk: The Prototype, Berserk:
-        # The Flame Dragon Knight, Berserk of Gluttony) all render as exactly
-        # "88%" -- the floor value, not a measured one.
-        #
-        # The title preference is not lost by removing this: `title_boost`
-        # already enters `hybrid_score` as a 0.30-weighted term in the SQL, so
-        # exact and prefix hits still rank first. Only the dishonest number is
-        # gone.
-        score_val = float(r.hybrid_score)
 
-        cand_dict = {
-            "manga": m,
-            "similarity_score": score_val,
-            "title_boost": float(getattr(r, "title_boost", 0.0) or 0.0),
-            "format_type": m.format_type
-        }
-        if hasattr(r, 'tag_alignment'):
-            cand_dict["tag_alignment"] = round(float(r.tag_alignment), 4)
+async def retrieve_catalog_page(
+    session: AsyncSession,
+    filters: Optional[RecommendFilters] = None,
+    sort: str = "default",
+    limit: int = 20,
+    offset: int = 0,
+) -> List[Dict[str, Any]]:
+    """One page of the catalogue when there is no query vector.
 
-        candidates.append(cand_dict)
+    Filter-only discovery: genres/status/score/year are the whole request, so
+    there is nothing to embed and no ANN ordering. The predicates come from the
+    same `apply_filter_criteria` / `safety_filter` pair the text path uses, so a
+    filter cannot mean one thing here and another in search.
 
-    return candidates
+    `limit + 1` is the caller's job: `has_more` needs one extra row and this
+    function returns exactly the page it was asked for.
+    """
+    if isinstance(filters, dict):
+        filters = RecommendFilters(**filters)
+
+    where_clauses: List[str] = []
+    params: Dict[str, Any] = {"limit": limit, "offset": offset}
+
+    allow_nsfw = filters.nsfw if filters and filters.nsfw is not None else False
+    nsfw_predicate = safety_filter(allow_nsfw)
+    if nsfw_predicate:
+        where_clauses.append(nsfw_predicate)
+
+    apply_filter_criteria(filters, where_clauses, params)
+
+    where_sql = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+
+    sql = text(f"""
+        SELECT {CANDIDATE_COLUMNS}
+        FROM manga
+        {where_sql}
+        ORDER BY {_browse_order_clause(sort)}
+        LIMIT :limit OFFSET :offset;
+    """)
+
+    result = await session.execute(sql, params)
+    return _hydrate_candidates(result.all())
