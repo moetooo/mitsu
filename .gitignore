@@ -53,7 +53,10 @@ partition_manga.py
 precompute_similarities.py
 temp_*.py
 check_*.py
-scripts/
+# Local scripts stay local, except the cover repair pass: its decision function
+# is covered by tests/test_resolve_covers_script.py, so CI needs the file.
+scripts/*
+!scripts/resolve_covers.py
 unused_and_obsolete_files.txt
 
 # Generated ML models

@@ -56,6 +56,11 @@ OWNS_TEST_DATABASE = not os.environ.get("MITSU_TEST_DATABASE_URL")
 
 # These must be set before app.config/app.db are imported anywhere.
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
+
+# Background loops start from the lifespan, and the cover canary makes a real HTTP
+# request. Nothing in the suite should depend on a third-party host, so it is off
+# here and on in production (its own module tests call `run_canary(force=True)`).
+os.environ["COVER_CANARY_ENABLED"] = "false"
 # Keep the test cache out of the developer's Redis keyspace. Only a dedicated
 # db index is ever flushed (see cleanup_connections).
 os.environ.setdefault("REDIS_URL", "redis://localhost:6379/15")
@@ -342,3 +347,46 @@ async def seeded_catalog():
         session.add_all(rows)
         await session.commit()
     return True
+
+
+# ---------------------------------------------------------------------------
+# A cover fixture row
+# ---------------------------------------------------------------------------
+# Several cover tests need one real title without depending on the catalogue being
+# populated, and without touching a row that belongs to someone else.
+
+FILE_MANGA_ID = 900000001
+FILE_COVER_URL = "https://s4.anilist.co/file/anilistcdn/media/manga/cover/large/fixture.jpg"
+
+
+@pytest.fixture
+async def manga_id():
+    """A throwaway title with a working cover, removed afterwards."""
+    from sqlalchemy import text
+
+    from app.db import AsyncSessionLocal
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("DELETE FROM manga WHERE id = :i"), {"i": FILE_MANGA_ID})
+        await session.execute(
+            text(
+                "INSERT INTO manga (id, title_english, cover_image_url, cover_status, "
+                "cover_source, cover_candidates) "
+                "VALUES (:i, 'Cover Fixture Title', :u, 'ok', 'anilist', CAST(:c AS jsonb))"
+            ),
+            {
+                "i": FILE_MANGA_ID,
+                "u": FILE_COVER_URL,
+                "c": f'[{{"url": "{FILE_COVER_URL}", "source": "anilist", "rank": 1}}]',
+            },
+        )
+        await session.commit()
+
+    yield FILE_MANGA_ID
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(
+            text("DELETE FROM cover_repair_log WHERE manga_id = :i"), {"i": FILE_MANGA_ID}
+        )
+        await session.execute(text("DELETE FROM manga WHERE id = :i"), {"i": FILE_MANGA_ID})
+        await session.commit()

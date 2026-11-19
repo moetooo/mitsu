@@ -9,6 +9,45 @@ class Settings(BaseSettings):
     DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql+asyncpg://user:password@localhost:5433/mitsu")
     REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379/0")
     GROQ_API_KEY: str = os.getenv("GROQ_API_KEY", "")
+
+    # --- LLM models (one provider, two callers) ---
+    # `LLM_MODEL` is the enrichment model. Reasoning (the one-sentence "why this
+    # matches" on /recommend) defaults to the same id and can be pointed at a
+    # different one with `LLM_REASONING_MODEL`. Both are configuration because a
+    # hardcoded id went 404 at the provider (`llama-3.1-8b-instant`), and the
+    # only symptom was silently missing reasoning on every request.
+    LLM_MODEL: str = os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+    LLM_REASONING_MODEL: str = os.getenv("LLM_REASONING_MODEL") or os.getenv("LLM_MODEL", "openai/gpt-oss-120b")
+    LLM_REASONING_ENABLED: bool = os.getenv("LLM_REASONING_ENABLED", "true").lower() in ("true", "1", "yes")
+    LLM_REASONING_TIMEOUT_S: float = float(os.getenv("LLM_REASONING_TIMEOUT_S", "5"))
+
+    # --- Cover policy (which hosts may be shown, and in what order) ---
+    # These were tuples in `app/core/covers.py` until the MangaDex block proved the
+    # point: reinstating a host is an operational decision, and it took a code change
+    # and a deploy to make one. Comma-separated so a deploy can set them without
+    # touching Python, and validated at startup (`validate_cover_config`).
+    #
+    # `COVER_ALLOWED_HOSTS` is a claim that a browser can load the host: add one only
+    # after `scripts/cover_probe.py` agrees. A host in both lists is treated as
+    # blocked (the safe reading).
+    COVER_ALLOWED_HOSTS: str = os.getenv(
+        "COVER_ALLOWED_HOSTS", "s4.anilist.co,cdn.myanimelist.net,media.kitsu.app"
+    )
+    COVER_BLOCKED_HOSTS: str = os.getenv("COVER_BLOCKED_HOSTS", "uploads.mangadex.org")
+    # Left-to-right is best-to-worst. Only names the database accepts
+    # (`ck_manga_cover_source`) are allowed; anything else is reported at startup.
+    COVER_SOURCE_ORDER: str = os.getenv(
+        "COVER_SOURCE_ORDER", "anilist,mal,kitsu,mangadex"
+    )
+    COVER_MAX_CANDIDATES: int = int(os.getenv("COVER_MAX_CANDIDATES", "3"))
+
+    # --- Logging ---
+    # Level and shape come from the environment so a deploy can raise verbosity
+    # without editing code, and `LOG_FORMAT=json` emits one object per line for a
+    # shipper. See `app/core/logging.py` (one configuration, not one per entry point).
+    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+    LOG_FORMAT: str = os.getenv("LOG_FORMAT", "plain")
+
     HF_TOKEN: str = os.getenv("HF_TOKEN", os.getenv("HUGGINGFACE_TOKEN", os.getenv("HUGGING_FACE_HUB_TOKEN", "")))
     ENABLE_INFERRED_TAG_RANKING: bool = os.getenv("ENABLE_INFERRED_TAG_RANKING", "false").lower() in ("true", "1", "yes")
     INFERRED_TAG_BOOST: float = float(os.getenv("INFERRED_TAG_BOOST", "0.10"))
@@ -37,6 +76,11 @@ class Settings(BaseSettings):
     SYNC_BACKFILL_RESERVE: int = int(os.getenv("SYNC_BACKFILL_RESERVE", "5"))
     SYNC_DAILY_RUN_LIMIT: int = int(os.getenv("SYNC_DAILY_RUN_LIMIT", "6"))
     SYNC_MANUAL_COOLDOWN_SECONDS: int = int(os.getenv("SYNC_MANUAL_COOLDOWN_SECONDS", "600"))
+    # Auto runs are limited per *local* day, not per UTC day: "once a day" must
+    # read the way the operator does. The request budget still resets at 00:00
+    # UTC; the two clocks are independent.
+    SYNC_AUTO_DAY_TZ: str = os.getenv("SYNC_AUTO_DAY_TZ", "Asia/Kolkata")
+    SYNC_AUTO_DAILY_RUN_LIMIT: int = int(os.getenv("SYNC_AUTO_DAILY_RUN_LIMIT", "1"))
     SYNC_USAGE_RETENTION_DAYS: int = int(os.getenv("SYNC_USAGE_RETENTION_DAYS", "90"))
 
     ANILIST_DAILY_REQUEST_BUDGET: int = int(os.getenv("ANILIST_DAILY_REQUEST_BUDGET", "30"))
@@ -45,6 +89,11 @@ class Settings(BaseSettings):
     MANGADEX_DAILY_REQUEST_BUDGET: int = int(os.getenv("MANGADEX_DAILY_REQUEST_BUDGET", "20"))
     MANGADEX_SYNC_BATCH_SIZE: int = int(os.getenv("MANGADEX_SYNC_BATCH_SIZE", "20"))
     MANGADEX_SYNC_ENABLED: bool = os.getenv("MANGADEX_SYNC_ENABLED", "true").lower() in ("true", "1", "yes")
+
+    # Weekly probe of the MangaDex cover CDN (see `services/cover_canary.py`).
+    # On by default in production; the test suite turns it off in conftest, because
+    # a lifespan-started loop would make a real network request during tests.
+    COVER_CANARY_ENABLED: bool = os.getenv("COVER_CANARY_ENABLED", "true").lower() in ("true", "1", "yes")
     # Historical catch-up target. Backfill walks AniList updates newer than this.
     SYNC_BACKFILL_CUTOFF: str = os.getenv("SYNC_BACKFILL_CUTOFF", "2026-08-06T19:43:15+00:00")
 

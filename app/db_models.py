@@ -44,6 +44,19 @@ class Manga(Base):
     average_score = Column(Integer)
     popularity = Column(Integer)
     cover_image_url = Column(Text)
+    # Cover health, tracked instead of inferred from the URL host
+    # (cover_unavailable_resolve.md). `cover_status` is what makes "how many
+    # covers are dead right now" a query rather than a manual probe; both it and
+    # `cover_source` are constrained by migration 0007.
+    cover_status = Column(String(16), nullable=False, server_default=text("'unverified'"))
+    cover_source = Column(String(16), nullable=True)
+    cover_checked_at = Column(DateTime(timezone=True), nullable=True)
+    # Ordered fallbacks for the renderer: [{"source", "url", "variant"}], best
+    # first. `cover_image_url` stays the denormalised first entry so existing
+    # filters (`IS NOT NULL`), indexes and payloads keep working unchanged.
+    cover_candidates: Any = Column(
+        JSONB, nullable=False, server_default=text("'[]'::jsonb")
+    )
     banner_image = Column(Text)
     site_url = Column(Text)
     alternative_titles: Any = Column(ARRAY(Text), server_default=text("'{}'::text[]"))
@@ -152,6 +165,32 @@ class SyncApiUsage(Base):
     updated_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
 
 
+class CoverRepairLog(Base):
+    """What the cover resolver changed, one row per decided URL.
+
+    `cover_status` is a snapshot that overwrites itself, so after a repair run a
+    row that was fixed and a row the run never reached look identical. This log
+    is what makes "what did last night's run do?" answerable, and it keeps the
+    previous URL so any change can be reversed.
+    """
+
+    __tablename__ = "cover_repair_log"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    manga_id = Column(Integer, ForeignKey("manga.id", ondelete="CASCADE"), nullable=False)
+    from_url = Column(Text)
+    to_url = Column(Text)
+    source = Column(String(16))  # anilist | kitsu | mal | none
+    result = Column(String(16), nullable=False)  # resolved | skipped | failed
+    detail = Column(Text)
+    created_at = Column(DateTime(timezone=True), nullable=False, server_default=text("now()"))
+
+    __table_args__ = (
+        Index("idx_cover_repair_log_manga", "manga_id", "created_at"),
+        Index("idx_cover_repair_log_created", "created_at"),
+    )
+
+
 class SyncRun(Base):
     """Bounded audit log for manual and scheduled syncs."""
     __tablename__ = "sync_runs"
@@ -249,6 +288,12 @@ Index(
     'idx_manga_cover_notnull',
     Manga.id,
     postgresql_where=text('cover_image_url IS NOT NULL'),
+)
+# "Which covers still need checking" — the only cover-health query that scans.
+Index(
+    'idx_manga_cover_status_pending',
+    Manga.cover_checked_at,
+    postgresql_where=text("cover_status <> 'ok'"),
 )
 
 # Graph traversal from a seed manga (reverse edges).

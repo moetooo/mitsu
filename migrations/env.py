@@ -25,7 +25,12 @@ import app.db_models  # noqa: F401 - registers every table on Base.metadata
 config = context.config
 
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    # `disable_existing_loggers` defaults to True, and this call used to inherit
+    # it: every logger that already existed - the application's, plus sqlalchemy's
+    # and httpx's - was switched off for the rest of the process. In the test suite
+    # that silenced `mitsu.*` from the first migration onwards; for an operator who
+    # runs `alembic upgrade head` in a process that also logs, it did the same.
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 target_metadata = Base.metadata
 
