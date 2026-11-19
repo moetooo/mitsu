@@ -12,6 +12,11 @@ dist
 dist-ssr
 *.local
 
+# Test artifacts (tests/ itself is source and stays tracked)
+coverage/
+*.lcov
+.vitest/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
