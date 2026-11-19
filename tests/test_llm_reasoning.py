@@ -7,6 +7,7 @@ int primary keys the router looks up.
 """
 
 import json
+import logging
 from types import SimpleNamespace
 
 from app.services import llm
@@ -138,3 +139,72 @@ async def test_empty_candidates_does_not_call_the_model(monkeypatch):
 
     assert await llm.generate_reasoning("q", []) == {}
     assert comp.calls == []
+
+
+# --------------------------------------------------------------------------
+# The model is configuration, not a literal
+# --------------------------------------------------------------------------
+async def test_request_uses_the_model_from_settings(monkeypatch):
+    """`llama-3.1-8b-instant` was hardcoded and Groq answered 404 model_not_found,
+    so every /recommend paid for a failed call and returned no reasoning."""
+    comp = _install(monkeypatch, {"results": [{"id": 1, "reasoning": "fits"}]})
+    monkeypatch.setattr(llm.settings, "LLM_REASONING_MODEL", "openai/gpt-oss-120b")
+    monkeypatch.setattr(llm.settings, "LLM_REASONING_TIMEOUT_S", 2.5)
+
+    await llm.generate_reasoning("q", [{"manga": _Manga(1, synopsis="s")}])
+
+    assert comp.calls[0]["model"] == "openai/gpt-oss-120b"
+    assert comp.calls[0]["timeout"] == 2.5
+
+
+async def test_reasoning_can_be_switched_off_without_removing_the_key(monkeypatch):
+    comp = _install(monkeypatch, {"results": [{"id": 1, "reasoning": "fits"}]})
+    monkeypatch.setattr(llm.settings, "LLM_REASONING_ENABLED", False)
+
+    assert await llm.generate_reasoning("q", [{"manga": _Manga(1, synopsis="s")}]) == {}
+    assert comp.calls == []
+
+
+async def test_a_failing_model_is_reported_once_per_process(monkeypatch):
+    """The provider's error body used to be printed on every single request."""
+
+    class _ProviderError(RuntimeError):
+        # groq's APIStatusError carries the provider's status code; a model that
+        # does not exist is a 404, which is the value worth logging.
+        status_code = 404
+
+    class _Boom:
+        status_code = 404
+
+        async def create(self, **_kwargs):
+            raise _ProviderError("model_not_found: The model `x` does not exist")
+
+    class _Collect(logging.Handler):
+        def __init__(self):
+            super().__init__()
+            self.records = []
+
+        def emit(self, record):
+            self.records.append(record)
+
+    monkeypatch.setattr(llm, "client", SimpleNamespace(chat=SimpleNamespace(completions=_Boom())))
+    monkeypatch.setattr(llm, "_reported_failures", set())
+    monkeypatch.setattr(llm.settings, "LLM_REASONING_MODEL", "model-that-does-not-exist")
+
+    # caplog is unreliable here: the suite installs its own root handlers, so the
+    # record is collected from the logger that produced it instead.
+    collector = _Collect()
+    target = logging.getLogger("mitsu.llm")
+    target.addHandler(collector)
+    try:
+        for _ in range(3):
+            assert await llm.generate_reasoning("q", [{"manga": _Manga(1, synopsis="s")}]) == {}
+    finally:
+        target.removeHandler(collector)
+
+    warnings = [r for r in collector.records if r.levelname == "WARNING"]
+    assert len(warnings) == 1
+    message = warnings[0].getMessage()
+    assert "model=model-that-does-not-exist" in message
+    assert "status=404" in message
+    assert "\n" not in message

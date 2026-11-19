@@ -20,6 +20,8 @@ import hashlib
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional, List
 
+from ..config import settings
+
 
 def compute_llm_cache_key(
     title_romaji: str,
@@ -70,7 +72,7 @@ class LLMEnrichmentCache:
         cache_key: str,
         data: Dict[str, Any],
         provider: str = "groq",
-        model: str = "llama-3.1-8b-instant",
+        model: str = "",
         prompt_version: str = "v1.0",
         candidate_tags: Optional[List[str]] = None
     ) -> None:
@@ -78,7 +80,7 @@ class LLMEnrichmentCache:
         record = {
             "input_hash": cache_key,
             "llm_provider": provider,
-            "llm_model": model,
+            "llm_model": model or settings.LLM_MODEL,
             "prompt_version": prompt_version,
             "cached_at": datetime.now(timezone.utc).isoformat(),
             "candidate_tags": list(candidate_tags or []),

@@ -26,6 +26,31 @@ logger = logging.getLogger("mitsu.llm")
 
 client = AsyncGroq(api_key=settings.GROQ_API_KEY) if settings.GROQ_API_KEY else None
 
+# One report per (model, failure) per process. A wrong model id used to print the
+# provider's full error dict on every single request; the first line is the one
+# that helps, the next thousand are noise.
+_reported_failures: set = set()
+
+
+def _compact(error: Exception) -> str:
+    """One line, bounded: a provider error body is multi-line and unbounded."""
+    return " ".join(str(error).split())[:160]
+
+
+def _report_failure(error: Exception) -> None:
+    status = getattr(error, "status_code", None) or type(error).__name__
+    key = f"{settings.LLM_REASONING_MODEL}|{status}"
+    if key in _reported_failures:
+        logger.debug("LLM reasoning failed again (model=%s status=%s)", settings.LLM_REASONING_MODEL, status)
+        return
+    _reported_failures.add(key)
+    logger.warning(
+        "LLM reasoning unavailable, results are served without it: model=%s status=%s detail=%s",
+        settings.LLM_REASONING_MODEL,
+        status,
+        _compact(error),
+    )
+
 MAX_SYNOPSIS_CHARS = 200
 NO_SYNOPSIS = "(no synopsis)"
 
@@ -99,7 +124,7 @@ async def generate_reasoning(
     query: str, candidates: List[Dict[str, Any]]
 ) -> Dict[int, str]:
     """Return ``{manga_id: one sentence}``; empty on any failure."""
-    if not client or not candidates:
+    if not client or not candidates or not settings.LLM_REASONING_ENABLED:
         return {}
 
     try:
@@ -119,10 +144,10 @@ async def generate_reasoning(
                 {"role": "system", "content": SYSTEM_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            model="llama-3.1-8b-instant",
+            model=settings.LLM_REASONING_MODEL,
             temperature=0.3,
             response_format={"type": "json_object"},
-            timeout=5.0,
+            timeout=settings.LLM_REASONING_TIMEOUT_S,
         )
 
         content = chat_completion.choices[0].message.content
@@ -131,5 +156,5 @@ async def generate_reasoning(
 
         return _reasoning_map(json.loads(content))
     except Exception as e:
-        logger.warning("LLM Reasoning generation failed: %s", e)
+        _report_failure(e)
         return {}
